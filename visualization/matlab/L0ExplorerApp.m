@@ -1,0 +1,1089 @@
+classdef L0ExplorerApp < handle
+    % L0ExplorerApp
+    % Browse L0 *.mat files, click a file, choose up to 6 signals to plot
+    % as dnum vs data. Supports nested fields like epsi.chan1, ctd.P_raw, gps.latitude, etc.
+
+    properties
+        Fig matlab.ui.Figure
+        GL matlab.ui.container.GridLayout
+
+        FolderBtn matlab.ui.control.Button
+        FolderLbl matlab.ui.control.Label
+        FileList matlab.ui.control.ListBox
+        RefreshBtn matlab.ui.control.Button
+
+        Axes
+        StructDrop
+        SignalDrop
+        YMinField
+        YMaxField
+        YLockCheck
+
+        AxesTickFontSize double = 10
+        AxesLabelFontSize double = 11
+        GlobalDnum double = []
+
+        Folder string = ""
+        Files string = strings(0,1)
+        CurrentData struct = struct()
+        CurrentFile string = ""
+        NRows double = 6
+
+        HasUserZoomed logical = false
+
+        LastStruct string
+        LastSignal string
+
+        SignalColors struct
+
+        % X-window slider handles
+        XWinSlider
+        XWinLenField
+        XWinResetBtn
+
+        % X-window state
+        UseXWindow  logical = false
+        XWindowLen  double  = 10    % window length in seconds
+        XWinFraction double = 0     % fractional position in profile [0,1]
+        ProfileTmin double  = 0     % profile start (dnum)
+        ProfileTmax double  = 0     % profile end   (dnum)
+
+        % Plot style
+        PlotStyleCheck              % uicheckbox handle
+        UseLine logical = false     % false = dots, true = lines
+
+        % Custom y-tick label text handles (blank YTickLabel keeps TightInset
+        % uniform; we draw our own labels as text() objects in the left margin)
+        YTickTextHandles            % cell(NRows,1) of gobject arrays
+    end
+
+
+    methods
+        function app = L0ExplorerApp(folder)
+            if nargin >= 1 && ~isempty(folder)
+                app.Folder = string(folder);
+            else
+                app.Folder = string(pwd);
+            end
+
+            app.buildUI();
+            app.loadFolder(app.Folder);
+        end
+
+        function buildUI(app)
+            app.Fig = uifigure('Name','L0 Explorer','Position',[100 100 1200 900]);
+
+            app.GL = uigridlayout(app.Fig,[1 2]);
+            app.GL.ColumnWidth = {240,'1x'};
+            app.GL.RowHeight = {'1x'};
+            app.GL.Padding = [10 10 10 10];
+            app.GL.ColumnSpacing = 10;
+
+            % LEFT: folder + list + x-window controls
+            left = uigridlayout(app.GL,[6 1]);
+            left.Layout.Row = 1;
+            left.Layout.Column = 1;
+            left.RowHeight = {44, 22, 34, '1x', 28, 36};
+            left.ColumnWidth = {'1x'};
+            left.RowSpacing = 6;
+
+            topRow = uigridlayout(left,[2 2]);
+            topRow.Layout.Row = 1;
+            topRow.Layout.Column = 1;
+            topRow.RowHeight = {'1x', 34};
+            topRow.ColumnWidth = {'1x', 140};
+            topRow.RowSpacing = 6;
+            topRow.Padding = [0 0 0 0];
+
+            % Folder label spans both columns
+            app.FolderLbl = uilabel(topRow,'Text',"");
+            app.FolderLbl.Layout.Row = 1;
+            app.FolderLbl.Layout.Column = [1 2];
+            app.trySetProp(app.FolderLbl,'Interpreter','none');
+            app.FolderLbl.FontSize = 12;
+            app.FolderLbl.WordWrap = 'on';
+            app.FolderLbl.VerticalAlignment = 'top';
+
+            % Button bottom-right
+            app.FolderBtn = uibutton(topRow,'push','Text','Choose folder…', ...
+                'ButtonPushedFcn', @(~,~)app.chooseFolder());
+            app.FolderBtn.Layout.Row = 2;
+            app.FolderBtn.Layout.Column = 2;
+            app.FolderBtn.FontSize = 12;
+
+            % Optional: show just the last folder name on bottom-left (nice touch)
+            % (or you can put nothing there)
+            mini = uilabel(topRow,'Text','');
+            mini.Layout.Row = 2;
+            mini.Layout.Column = 1;
+
+
+            lbl = uilabel(left,'Text','L0 files (*.mat):');
+            lbl.Layout.Row = 2;
+            lbl.Layout.Column = 1;
+
+            app.RefreshBtn = uibutton(left,'push','Text','Refresh list', ...
+                'ButtonPushedFcn', @(~,~)app.loadFolder(app.Folder));
+            app.RefreshBtn.Layout.Row = 3;
+            app.RefreshBtn.Layout.Column = 1;
+
+            % NOTE: uilistbox does NOT have 'Interpreter' property (even in R2024b)
+            app.FileList = uilistbox(left, ...
+                'Items',{}, ...
+                'ValueChangedFcn', @(~,~)app.onFileSelected());
+            app.FileList.Layout.Row = 4;
+            app.FileList.Layout.Column = 1;
+            app.FileList.FontName = 'Sans';  % or 'Consolas' on Windows
+            app.FileList.FontSize = 12;
+
+            % X-window: length field + Full-view button
+            xwinRow = uigridlayout(left, [1 3]);
+            xwinRow.Layout.Row = 5;
+            xwinRow.Layout.Column = 1;
+            xwinRow.RowHeight = {'1x'};
+            xwinRow.ColumnWidth = {76, '1x', 64};
+            xwinRow.ColumnSpacing = 4;
+            xwinRow.Padding = [0 2 0 2];
+
+            xwinLbl = uilabel(xwinRow, 'Text', 'X win (s):');
+            xwinLbl.Layout.Row = 1; xwinLbl.Layout.Column = 1;
+            xwinLbl.VerticalAlignment = 'center';
+            xwinLbl.FontSize = 12;
+
+            app.XWinLenField = uieditfield(xwinRow, 'numeric', ...
+                'Placeholder', 'sec', ...
+                'Value', 0, ...
+                'Limits', [0 Inf], ...
+                'ValueChangedFcn', @(~,~)app.onXWinLenChanged());
+            app.XWinLenField.Layout.Row = 1; app.XWinLenField.Layout.Column = 2;
+            app.XWinLenField.FontSize = 12;
+
+            app.XWinResetBtn = uibutton(xwinRow, 'push', 'Text', 'Full view', ...
+                'ButtonPushedFcn', @(~,~)app.onXWinReset());
+            app.XWinResetBtn.Layout.Row = 1; app.XWinResetBtn.Layout.Column = 3;
+            app.XWinResetBtn.FontSize = 11;
+
+            % X-window: plot-style checkbox + position slider
+            sliderRow = uigridlayout(left, [1 2]);
+            sliderRow.Layout.Row = 6;
+            sliderRow.Layout.Column = 1;
+            sliderRow.RowHeight = {'1x'};
+            sliderRow.ColumnWidth = {58, '1x'};
+            sliderRow.ColumnSpacing = 6;
+            sliderRow.Padding = [0 6 0 6];
+
+            app.PlotStyleCheck = uicheckbox(sliderRow, 'Text', 'Lines', ...
+                'Value', false, ...
+                'ValueChangedFcn', @(~,~)app.onPlotStyleChanged());
+            app.PlotStyleCheck.Layout.Row = 1; app.PlotStyleCheck.Layout.Column = 1;
+            app.PlotStyleCheck.FontSize = 12;
+
+            app.XWinSlider = uislider(sliderRow, ...
+                'Limits', [0 100], ...
+                'Value', 0, ...
+                'MajorTicks', [], ...
+                'MinorTicks', [], ...
+                'Enable', 'off', ...
+                'ValueChangedFcn',  @(~,~)app.onXWinSliderMoved(), ...
+                'ValueChangingFcn', @(~,evt)app.onXWinSliderChanging(evt));
+            app.XWinSlider.Layout.Row = 1; app.XWinSlider.Layout.Column = 2;
+
+
+            % RIGHT: rows of controls + axes
+            right = uigridlayout(app.GL,[app.NRows 1]);
+            right.Layout.Row = 1;
+            right.Layout.Column = 2;
+            right.RowHeight = repmat({'1x'},1,app.NRows);
+            right.ColumnWidth = {'1x'};
+            right.RowSpacing = 10;
+
+            app.Axes = gobjects(app.NRows,1);
+            app.StructDrop = gobjects(app.NRows,1);
+            app.SignalDrop = gobjects(app.NRows,1);
+            app.YMinField = gobjects(app.NRows,1);
+            app.YMaxField = gobjects(app.NRows,1);
+            app.YLockCheck = gobjects(app.NRows,1);
+            app.LastStruct = ["epsi"; "epsi"; "epsi"; "epsi"; "ctd"; "ctd"];
+            app.LastSignal = ["t1_volt"; "t2_volt"; "s1_volt"; "s2_volt"; "z"; "T"];
+            app.YTickTextHandles = cell(app.NRows, 1);
+
+
+
+            for i = 1:app.NRows
+                % Row container: axes on left, controls on right
+                row = uigridlayout(right,[1 2]);
+                row.Layout.Row = i;
+                row.Layout.Column = 1;
+                row.RowHeight = {'1x'};
+                row.ColumnWidth = {'1x', 220};   % right column is controls
+                row.ColumnSpacing = 10;
+                row.Padding = [68 0 0 0];  % left margin reserved for custom y-tick labels
+
+                % Axes (left)
+                app.Axes(i) = uiaxes(row);
+                app.Axes(i).FontSize = app.AxesTickFontSize;
+                app.Axes(i).XLabel.FontSize = app.AxesLabelFontSize;
+                app.Axes(i).YLabel.FontSize = app.AxesLabelFontSize;
+                app.Axes(i).Layout.Row = 1;
+                app.Axes(i).Layout.Column = 1;
+                grid(app.Axes(i),'on');
+
+                % Blank YTickLabel (set in plotRow) keeps TightInset uniform so
+                % all axes share identical left/right edges.  Custom labels are
+                % text() objects drawn in the 68-px left padding reserved above.
+                app.Axes(i).PositionConstraint = 'innerposition';
+
+                % Re-blank labels and refresh text objects whenever y-limits
+                % change (covers user y-zoom as well as programmatic changes).
+                ii = i;
+                addlistener(app.Axes(i), 'YLim', 'PostSet', ...
+                    @(~,~)app.onAxesYLimChanged(ii));
+
+
+                % Controls panel (right) - inline dropdowns + y-limit controls
+                ctrl = uigridlayout(row,[4 3]);
+                ctrl.Layout.Row = 1;
+                ctrl.Layout.Column = 2;
+                ctrl.RowHeight = {28, 28, 26, 22};
+                ctrl.ColumnWidth = {52, '1x', '1x'};
+                ctrl.RowSpacing = 4;
+                ctrl.Padding = [0 0 0 0];
+
+                lbl1 = uilabel(ctrl,'Text','Struct');
+                lbl1.Layout.Row = 1; lbl1.Layout.Column = 1;
+                lbl1.VerticalAlignment = 'center';
+
+                app.StructDrop(i) = uidropdown(ctrl,'Items',{}, ...
+                    'ValueChangedFcn', @(~,~)app.onStructChanged(i));
+                app.StructDrop(i).Layout.Row = 1; app.StructDrop(i).Layout.Column = [2 3];
+
+                lbl2 = uilabel(ctrl,'Text','Signal');
+                lbl2.Layout.Row = 2; lbl2.Layout.Column = 1;
+                lbl2.VerticalAlignment = 'center';
+
+                app.SignalDrop(i) = uidropdown(ctrl,'Items',{}, ...
+                    'ValueChangedFcn', @(~,~)app.onSignalChanged(i));
+                app.SignalDrop(i).Layout.Row = 2; app.SignalDrop(i).Layout.Column = [2 3];
+                app.trySetProp(app.SignalDrop(i),'Tooltip','Signal (supports nested fields)');
+
+                ylbl = uilabel(ctrl,'Text','Y-limits');
+                ylbl.Layout.Row = 3; ylbl.Layout.Column = 1;
+                ylbl.VerticalAlignment = 'center';
+
+                app.YMinField(i) = uieditfield(ctrl,'numeric', ...
+                    'Placeholder','min', ...
+                    'ValueChangedFcn', @(~,~)app.onYLimitChanged(i));
+                app.YMinField(i).Layout.Row = 3; app.YMinField(i).Layout.Column = 2;
+
+                app.YMaxField(i) = uieditfield(ctrl,'numeric', ...
+                    'Placeholder','max', ...
+                    'ValueChangedFcn', @(~,~)app.onYLimitChanged(i));
+                app.YMaxField(i).Layout.Row = 3; app.YMaxField(i).Layout.Column = 3;
+
+                app.YLockCheck(i) = uicheckbox(ctrl,'Text','fix y-limits', ...
+                    'Value', false, ...
+                    'ValueChangedFcn', @(~,~)app.plotRow(i));
+                app.YLockCheck(i).Layout.Row = 4; app.YLockCheck(i).Layout.Column = [2 3];
+
+            end
+
+            % Link x-axes so zoom/pan syncs across all panels
+            linkaxes(app.Axes, 'x');
+
+            % Mark HasUserZoomed only when the USER zooms/pans (toolbar/mouse)
+            z = zoom(app.Fig);
+            z.ActionPostCallback = @(~,~)app.onUserZoomPan();
+
+            p = pan(app.Fig);
+            p.ActionPostCallback = @(~,~)app.onUserZoomPan();
+
+            % Initialize SignalColors
+            app.SignalColors = app.defineSignalColors();
+
+        end
+
+        function chooseFolder(app)
+            p = uigetdir(char(app.Folder), 'Select L0 folder');
+            if isequal(p,0); return; end
+            app.loadFolder(string(p));
+        end
+
+        function loadFolder(app, folder)
+            folder = string(folder);
+            if ~isfolder(folder)
+                uialert(app.Fig, "Folder not found: " + folder, "Folder error");
+                return;
+            end
+
+            app.Folder = folder;
+            app.FolderLbl.Text = folder;
+
+            d = dir(fullfile(folder,"*.mat"));
+            names = string({d.name})';
+            names = sort(names);
+            app.Files = names;
+
+            if isempty(names)
+                app.FileList.Items = {};
+                app.CurrentData = struct();
+                app.CurrentFile = "";
+                app.Fig.Name = "L0 Explorer (no files)";
+                app.populateSelectorsEmpty();
+                return;
+            end
+
+            app.FileList.Items = cellstr(names);
+            app.FileList.Value = app.FileList.Items{1}; % always set valid selection
+            app.onFileSelected();
+        end
+
+        function populateSelectorsEmpty(app)
+            for i = 1:app.NRows
+                app.StructDrop(i).Items = {};
+                app.SignalDrop(i).Items = {};
+                cla(app.Axes(i));
+            end
+        end
+
+        function onFileSelected(app)
+            val = app.FileList.Value;
+            if isempty(val); return; end
+
+            app.CurrentFile = string(val);
+            fp = fullfile(app.Folder, app.CurrentFile);
+
+            try
+                S = load(fp);
+            catch ME
+                uialert(app.Fig, "Failed to load: " + fp + newline + ME.message, "Load error");
+                return;
+            end
+
+            app.CurrentData = S;
+
+            % Build a global dnum (used to initialize linked axes and as fallback)
+            app.GlobalDnum = [];
+            d = app.findFirstDnumInStruct(S);
+            if ~isempty(d)
+                app.GlobalDnum = d(:);
+            end
+
+            % Store profile time range for x-window
+            if ~isempty(app.GlobalDnum)
+                app.ProfileTmin = min(app.GlobalDnum);
+                app.ProfileTmax = max(app.GlobalDnum);
+            else
+                app.ProfileTmin = 0;
+                app.ProfileTmax = 0;
+            end
+
+            % IMPORTANT: linked axes start at [0 1]. Set XLim so data is visible.
+            if ~isempty(app.GlobalDnum)
+                tmin = min(app.GlobalDnum);
+                tmax = max(app.GlobalDnum);
+                if isfinite(tmin) && isfinite(tmax) && tmax > tmin
+                    app.Axes(1).XLim = [tmin tmax];  % propagates to all due to linkaxes
+                end
+            end
+
+            % New file => treat as not user-zoomed yet
+            app.HasUserZoomed = false;
+
+            % Title: prefer raw_file_info.filename if present
+            ttl = app.CurrentFile;
+            if isfield(S,'raw_file_info') && isstruct(S.raw_file_info) && isfield(S.raw_file_info,'filename')
+                try
+                    ttl = string(S.raw_file_info.filename);
+                catch
+                end
+            end
+            app.Fig.Name = "L0 Explorer — " + ttl;
+
+            structs = app.getTopStructCandidates(S);
+
+            for i = 1:app.NRows
+                % Update struct list
+                app.StructDrop(i).Items = cellstr(structs);
+
+                if isempty(structs)
+                    app.StructDrop(i).Items = {};
+                    app.SignalDrop(i).Items = {};
+                    cla(app.Axes(i));
+                    continue;
+                end
+
+                % --- Restore struct selection if possible ---
+                desiredStruct = "";
+                if ~isempty(app.LastStruct) && strlength(app.LastStruct(i)) > 0
+                    desiredStruct = app.LastStruct(i);
+                end
+
+                if desiredStruct ~= "" && any(strcmp(app.StructDrop(i).Items, char(desiredStruct)))
+                    app.StructDrop(i).Value = char(desiredStruct);
+                else
+                    app.StructDrop(i).Value = app.StructDrop(i).Items{1};
+                    app.LastStruct(i) = string(app.StructDrop(i).Value);
+                end
+
+                % Populate signals for this struct
+                topName = string(app.StructDrop(i).Value);
+                topStruct = app.CurrentData.(topName);
+                signals = app.listNumericSignals(topStruct);
+                signals = signals(signals ~= "dnum");
+
+                if isempty(signals)
+                    app.SignalDrop(i).Items = {};
+                    cla(app.Axes(i));
+                    continue;
+                end
+
+                app.SignalDrop(i).Items = cellstr(signals);
+
+                % --- Restore signal selection if possible ---
+                desiredSig = "";
+                if ~isempty(app.LastSignal) && strlength(app.LastSignal(i)) > 0
+                    desiredSig = app.LastSignal(i);
+                end
+
+                if desiredSig ~= "" && any(strcmp(app.SignalDrop(i).Items, char(desiredSig)))
+                    app.SignalDrop(i).Value = char(desiredSig);
+                else
+                    app.SignalDrop(i).Value = app.SignalDrop(i).Items{1};
+                    app.LastSignal(i) = string(app.SignalDrop(i).Value);
+                end
+
+                % Plot using the restored selections
+                app.plotRow(i);
+            end
+
+            % Apply x-window at the same fractional position in the new profile
+            if app.UseXWindow
+                app.applyXWindow();
+            end
+
+        end
+
+        function structs = getTopStructCandidates(app, S) %#ok<INUSD>
+            f = fieldnames(S);
+            keep = false(size(f));
+
+            for k = 1:numel(f)
+                name = f{k};
+                if strcmp(name,'raw_file_info'); continue; end
+                if isstruct(S.(name))
+                    keep(k) = true;
+                end
+            end
+
+            structs = string(f(keep));
+
+            pref = ["epsi","ctd","gps","alt","act","seg","spec","fluor","ttv","vnav","isap","apf"];
+            [isIn, loc] = ismember(pref, structs);     % loc indexes into 'structs'
+            ordered = structs(loc(isIn));              % keep only those found, in pref order
+            rest = setdiff(structs, ordered, 'stable');
+            structs = [ordered; rest];
+
+        end
+
+        function onStructChanged(app, rowIdx)
+            if isempty(app.CurrentFile) || isempty(fieldnames(app.CurrentData))
+                return;
+            end
+
+            topName = string(app.StructDrop(rowIdx).Value);
+            if topName == "" || ~isfield(app.CurrentData, topName)
+                app.SignalDrop(rowIdx).Items = {};
+                return;
+            end
+
+            % Save selections whenever user changes them
+            app.LastStruct(rowIdx) = topName;
+
+            topStruct = app.CurrentData.(topName);
+            signals = app.listNumericSignals(topStruct);
+
+            signals = signals(signals ~= "dnum"); % dnum is implicit
+
+            if isempty(signals)
+                app.SignalDrop(rowIdx).Items = {};
+            else
+                app.SignalDrop(rowIdx).Items = cellstr(signals);
+                app.SignalDrop(rowIdx).Value = app.SignalDrop(rowIdx).Items{1};
+                app.plotRow(rowIdx);
+            end
+
+        end
+
+        function onSignalChanged(app, rowIdx)
+            % Plot immediately when signal selection changes
+            if isempty(app.SignalDrop(rowIdx).Items)
+                return;
+            end
+            if isempty(app.SignalDrop(rowIdx).Value)
+                return;
+            end
+            app.LastSignal(rowIdx) = string(app.SignalDrop(rowIdx).Value);
+            app.plotRow(rowIdx);
+        end
+
+        function signals = listNumericSignals(app, S)
+            signals = strings(0,1);
+            if ~isstruct(S); return; end
+
+            signals = app.recurseSignals(S, "");
+
+            [~,idx] = unique(signals,'stable');
+            signals = signals(idx);
+        end
+
+        function out = recurseSignals(app, S, prefix) %#ok<INUSD>
+            out = strings(0,1);
+            f = fieldnames(S);
+
+            for k = 1:numel(f)
+                name = f{k};
+                val = S.(name);
+
+                if prefix == ""
+                    path = string(name);
+                else
+                    path = prefix + "." + string(name);
+                end
+
+                if isstruct(val)
+                    out = [out; app.recurseSignals(val, path)]; %#ok<AGROW>
+                else
+                    if isnumeric(val) && ~isempty(val)
+                        sz = size(val);
+                        isVectorLike = isvector(val) || (numel(sz)==2 && (sz(1)==1 || sz(2)==1));
+                        if isVectorLike
+                            out = [out; path]; %#ok<AGROW>
+                        end
+                    end
+                end
+            end
+        end
+
+        function C = defineSignalColors(app) %#ok<INUSD>
+            C = struct();
+
+            C.a1_g = [129 27 112]./255;
+            C.a2_g = [235 64 61]./255;
+            C.a3_g = [245 199 118]./255;
+            C.s1_volt = [60 134 76]./255;
+            C.s2_volt = [173 215 136]./255;
+            C.t1_volt = [29 78 140]./255;
+            C.t2_volt = [78 173 173]./255;
+            C.s1_count = [60 134 76]./255;
+            C.s2_count = [173 215 136]./255;
+            C.t1_count = [29 78 140]./255;
+            C.t2_count = [78 173 173]./255;
+
+            C.P = [0 0 0];
+            C.P_raw = [0 0 0];
+            C.dPdt = [0.4 0.4 0.4];
+
+            C.T = [0.8941 0.1020 0.1098];
+            C.T_raw = [0.8941 0.1020 0.1098];
+            C.S = [0.2157 0.4941 0.7216];
+            C.S_raw = [0.2157 0.4941 0.7216];
+
+            C.alt = [0 0 1];
+
+            C.gyro1 = [129 27 112]./255;
+            C.gyro2 = [235 64 61]./255;
+            C.gyro3 = [245 199 118]./255;
+
+            C.compass1 = [0 0 0.543];
+            C.compass2 = [185 38 26]./255;
+            C.compass3 = [0 0 0];
+
+            C.chla = [0.1059 0.6196 0.4667];
+            C.bb   = [0.4000 0.6510 0.1176];
+            C.fdom = [0.9020 0.6706 0.0078];
+            C.ucond = [0.7373 0.5020 0.7412];
+
+            C.channel1 = [0.3686 0.3098 0.6353];
+            C.channel2 = [0.3127 0.6971 0.6726];
+            C.channel3 = [0.7616 0.9058 0.6299];
+            C.channel4 = [0.9500 0.9500 0.7116];
+            C.channel5 = [0.9942 0.7583 0.4312];
+            C.channel6 = [0.9288 0.3634 0.2749];
+            C.channel7 = [0.6196 0.0039 0.2588];
+        end
+
+
+        function plotRow(app, rowIdx)
+            if isempty(app.CurrentFile) || isempty(fieldnames(app.CurrentData))
+                uialert(app.Fig, "Select a file first.", "No file");
+                return;
+            end
+
+            topName = string(app.StructDrop(rowIdx).Value);
+            sigPath = string(app.SignalDrop(rowIdx).Value);
+
+            if topName=="" || sigPath==""
+                uialert(app.Fig, "Pick a struct and signal.", "Missing selection");
+                return;
+            end
+
+            if ~isfield(app.CurrentData, topName)
+                uialert(app.Fig, "Struct not found in file: " + topName, "Missing struct");
+                return;
+            end
+
+            topStruct = app.CurrentData.(topName);
+
+            [dnum, dnumSrc] = app.getDnum(topStruct, app.CurrentData);
+            if isempty(dnum)
+                uialert(app.Fig, "No dnum found (looked for " + topName + ".dnum then top-level dnum).", ...
+                    "Missing time");
+                return;
+            end
+
+            try
+                y = app.getByDotPath(topStruct, sigPath);
+            catch ME
+                uialert(app.Fig, "Could not access " + topName + "." + sigPath + newline + ME.message, "Signal error");
+                return;
+            end
+
+            if ~isnumeric(y) || isempty(y)
+                uialert(app.Fig, "Selected signal is empty or not numeric.", "Signal error");
+                return;
+            end
+
+            dnum = dnum(:);
+            y = y(:);
+
+            n = min(numel(dnum), numel(y));
+            dnum = dnum(1:n);
+            y = y(1:n);
+
+            ax = app.Axes(rowIdx);
+            % Preserve x-limits if the user has zoomed/panned or the x-window is active
+            keepX = app.HasUserZoomed || app.UseXWindow;
+            if keepX
+                xlim0 = ax.XLim;
+                keepX = all(isfinite(xlim0)) && xlim0(2) > xlim0(1) && xlim0(2) > 1000;
+            end
+
+            cla(ax);
+
+            clr = app.getSignalColor(sigPath);
+            try
+                if app.UseLine
+                    plot(ax, dnum, y, '-', 'Color', clr, 'LineWidth', 0.5);
+                else
+                    plot(ax, dnum, y, '.', 'Color', clr);
+                end
+            catch ME
+                uialert(app.Fig, "Plot failed for " + topName + "." + sigPath + newline + ME.message, "Plot error");
+                return;
+            end
+
+            grid(ax,'on');
+
+            try
+                datetick(ax,'x','keeplimits'); %#ok<DATETICK>
+            catch
+            end
+
+            % Blank all y-tick labels so TightInset(1) is near-zero and identical
+            % for every axes row → perfect left AND right edge alignment always.
+            % The actual values are shown by text() objects in updateYTickText().
+            n = numel(ax.YTick);
+            if n > 0
+                ax.YTickLabel = repmat({''}, 1, n);
+            end
+
+            app.trySetProp(ax.XLabel,'Interpreter','none');
+            app.trySetProp(ax.YLabel,'Interpreter','none');
+
+            % Reverse y-axis for pressure/depth signals
+            if app.shouldReverseY(topName, sigPath)
+                ax.YDir = 'reverse';
+            else
+                ax.YDir = 'normal';
+            end
+
+
+            xlabel(ax, sprintf('dnum (%s)', dnumSrc));
+            %ylabel(ax, topName + "." + sigPath); %Don't print ylabel because it will show up under the numbers
+
+            if keepX
+                ax.XLim = xlim0;
+            end
+
+            % Apply fixed y-limits if the user has enabled them for this row
+            if app.YLockCheck(rowIdx).Value
+                ymin = app.YMinField(rowIdx).Value;
+                ymax = app.YMaxField(rowIdx).Value;
+                if isfinite(ymin) && isfinite(ymax) && ymax > ymin
+                    ax.YLim = [ymin ymax];
+                end
+            end
+
+            % Apply x-window (overrides zoom/pan-preserved limits)
+            if app.UseXWindow && isfinite(app.ProfileTmin) && app.ProfileTmax > app.ProfileTmin
+                winDays    = app.XWindowLen / 86400;
+                profileDur = app.ProfileTmax - app.ProfileTmin;
+                if winDays < profileDur
+                    winStart = app.ProfileTmin + app.XWinFraction * profileDur;
+                    winStart = max(winStart, app.ProfileTmin);
+                    winStart = min(winStart, app.ProfileTmax - winDays);
+                    ax.XLim  = [winStart, winStart + winDays];
+                end
+            end
+
+            % Draw custom y-tick labels in the reserved left margin.
+            % Called last so YLim/YTick are fully settled.
+            app.updateYTickText(rowIdx);
+
+        end
+
+        function onPlotStyleChanged(app)
+            app.UseLine = app.PlotStyleCheck.Value;
+            for i = 1:app.NRows
+                if ~isempty(app.SignalDrop(i).Items) && ~isempty(app.SignalDrop(i).Value)
+                    app.plotRow(i);
+                end
+            end
+        end
+
+        function onXWinLenChanged(app)
+            val = app.XWinLenField.Value;
+            if isnan(val) || val <= 0
+                app.onXWinReset();
+                return;
+            end
+            app.XWindowLen  = val;
+            app.UseXWindow  = true;
+            app.XWinSlider.Enable = 'on';
+            app.applyXWindow();
+        end
+
+        function onXWinSliderMoved(app)
+            if ~app.UseXWindow; return; end
+            app.XWinFraction = app.XWinSlider.Value / 100;
+            app.applyXWindow();
+        end
+
+        function onXWinSliderChanging(app, evt)
+            if ~app.UseXWindow; return; end
+            app.XWinFraction = evt.Value / 100;
+            app.applyXWindow();
+        end
+
+        function onXWinReset(app)
+            app.UseXWindow   = false;
+            app.HasUserZoomed = false;
+            app.XWinFraction = 0;
+            app.XWinSlider.Value  = 0;
+            app.XWinSlider.Enable = 'off';
+            if isfinite(app.ProfileTmin) && app.ProfileTmax > app.ProfileTmin
+                app.Axes(1).XLim = [app.ProfileTmin, app.ProfileTmax];
+                for i = 1:app.NRows
+                    try; datetick(app.Axes(i),'x','keeplimits'); catch; end
+                end
+            end
+        end
+
+        function applyXWindow(app)
+            if ~app.UseXWindow; return; end
+            if ~isfinite(app.ProfileTmin) || app.ProfileTmax <= app.ProfileTmin; return; end
+
+            winDays    = app.XWindowLen / 86400;
+            profileDur = app.ProfileTmax - app.ProfileTmin;
+
+            if winDays >= profileDur
+                app.Axes(1).XLim = [app.ProfileTmin, app.ProfileTmax];
+                app.XWinSlider.Value = 0;
+                for i = 1:app.NRows
+                    try; datetick(app.Axes(i),'x','keeplimits'); catch; end
+                end
+                return;
+            end
+
+            maxFrac  = 1 - winDays / profileDur;
+            frac     = min(max(app.XWinFraction, 0), maxFrac);
+            winStart = app.ProfileTmin + frac * profileDur;
+
+            app.Axes(1).XLim     = [winStart, winStart + winDays];
+            app.XWinSlider.Value = frac * 100;
+
+            for i = 1:app.NRows
+                try; datetick(app.Axes(i),'x','keeplimits'); catch; end
+            end
+        end
+
+        function onYLimitChanged(app, rowIdx)
+            if app.YLockCheck(rowIdx).Value
+                app.plotRow(rowIdx);
+            end
+        end
+
+        function clr = getSignalColor(app, sigPath)
+            % Default: dark gray RGB
+            clr = [0.3 0.3 0.3];
+
+            parts = split(sigPath,'.');
+            key = char(parts(end));
+
+            if isfield(app.SignalColors, key)
+                c = app.SignalColors.(key);
+
+                % If stored as short color char, convert to RGB
+                if ischar(c) || (isstring(c) && isscalar(c))
+                    clr = app.colorCharToRGB(char(c));
+                elseif isnumeric(c) && numel(c)==3
+                    clr = double(c(:)).';
+                end
+            end
+        end
+
+        function rgb = colorCharToRGB(app, c) %#ok<INUSD>
+            switch lower(c)
+                case 'k', rgb = [0 0 0];
+                case 'w', rgb = [1 1 1];
+                case 'r', rgb = [1 0 0];
+                case 'g', rgb = [0 1 0];
+                case 'b', rgb = [0 0 1];
+                case 'c', rgb = [0 1 1];
+                case 'm', rgb = [1 0 1];
+                case 'y', rgb = [1 1 0];
+                otherwise, rgb = [0.3 0.3 0.3];
+            end
+        end
+
+
+
+        function onUserZoomPan(app)
+            app.HasUserZoomed = true;
+        end
+
+        function tf = shouldReverseY(app, topName, sigPath) %#ok<INUSD>
+            % Reverse for pressure/depth-like signals
+            tf = false;
+
+            parts = split(sigPath,'.');
+            key = lower(parts(end));
+
+            if ismember(key, {'p','p_raw','z'})
+                tf = true;
+            end
+        end
+
+
+        function [dnum, src] = getDnum(app, topStruct, S) %#ok<INUSD>
+            dnum = [];
+            src = "";
+
+            % 1) Best: dnum in the selected struct
+            if isstruct(topStruct) && isfield(topStruct,'dnum') && isnumeric(topStruct.dnum) && ~isempty(topStruct.dnum)
+                d = topStruct.dnum(:);
+                d = d(isfinite(d));
+                if numel(d) >= 2
+                    dnum = d;
+                    src = "struct.dnum";
+                    return;
+                end
+            end
+
+            % 2) Next: top-level dnum
+            if isfield(S,'dnum') && isnumeric(S.dnum) && ~isempty(S.dnum)
+                d = S.dnum(:);
+                d = d(isfinite(d));
+                if numel(d) >= 2
+                    dnum = d;
+                    src = "top-level dnum";
+                    return;
+                end
+            end
+
+            % 3) Next: cached global dnum from file scan
+            if ~isempty(app.GlobalDnum)
+                d = app.GlobalDnum(:);
+                d = d(isfinite(d));
+                if numel(d) >= 2
+                    dnum = d;
+                    src = "cached global dnum";
+                    return;
+                end
+            end
+
+            % 4) Last resort: search anywhere in the file for a usable dnum
+            d = app.findFirstDnumInStruct(S);
+            if ~isempty(d)
+                dnum = d(:);
+                src = "auto-scanned dnum";
+                return;
+            end
+        end
+
+        function dnum = findFirstDnumInStruct(app, S) %#ok<INUSD>
+            % Recursively search a struct for a numeric field named 'dnum'
+            % Returns the first usable (>=2 finite values) vector found.
+
+            dnum = [];
+
+            if ~isstruct(S); return; end
+
+            f = fieldnames(S);
+            for k = 1:numel(f)
+                nm = f{k};
+                v = S.(nm);
+
+                if strcmpi(nm,'dnum') && isnumeric(v) && ~isempty(v)
+                    d = v(:);
+                    d = d(isfinite(d));
+                    if numel(d) >= 2
+                        dnum = d;
+                        return;
+                    end
+                end
+
+                if isstruct(v)
+                    d = app.findFirstDnumInStruct(v);
+                    if ~isempty(d)
+                        dnum = d;
+                        return;
+                    end
+                end
+            end
+        end
+
+
+        function val = getByDotPath(app, S, path) %#ok<INUSD>
+            parts = split(string(path), ".");
+            val = S;
+
+            for i = 1:numel(parts)
+                p = char(parts(i));
+                if ~isstruct(val) || ~isfield(val, p)
+                    error("Missing field '%s' in path '%s'.", p, path);
+                end
+                val = val.(p);
+            end
+        end
+
+        function trySetProp(app, h, propName, propValue) %#ok<INUSD>
+            % Safely set optional UI properties without crashing on releases/controls
+            if isempty(h) || ~isvalid(h); return; end
+            if isprop(h, propName)
+                try
+                    h.(propName) = propValue;
+                catch
+                end
+            end
+        end
+
+        function onAxesYLimChanged(app, rowIdx)
+            % Fires via PostSet listener whenever an axes' YLim changes
+            % (signal change, y-lock, or user y-zoom).  Re-blank tick labels
+            % (in case MATLAB auto-restored them) and refresh text objects.
+            if isempty(app.YTickTextHandles) || rowIdx > numel(app.Axes)
+                return;
+            end
+            ax = app.Axes(rowIdx);
+            if ~isvalid(ax); return; end
+            n = numel(ax.YTick);
+            if n > 0
+                try; ax.YTickLabel = repmat({''}, 1, n); catch; end
+            end
+            app.updateYTickText(rowIdx);
+        end
+
+        function updateYTickText(app, rowIdx)
+            % Delete old custom tick-label text objects and draw fresh ones
+            % in the 68-px left padding area, just outside the axes boundary.
+            if isempty(app.YTickTextHandles) || rowIdx > numel(app.YTickTextHandles)
+                return;
+            end
+            ax = app.Axes(rowIdx);
+            if ~isvalid(ax); return; end
+
+            % Remove stale handles (cla() or previous call may have deleted them)
+            old = app.YTickTextHandles{rowIdx};
+            if ~isempty(old)
+                try; delete(old(isvalid(old))); catch; end
+            end
+            app.YTickTextHandles{rowIdx} = gobjects(0);
+
+            ticks = ax.YTick;
+            if isempty(ticks); return; end
+
+            ylim = ax.YLim;
+            span = ylim(2) - ylim(1);
+            if ~isfinite(span) || span == 0; return; end
+
+            reversed = strcmp(ax.YDir, 'reverse');
+            handles  = gobjects(0);
+
+            for k = 1:numel(ticks)
+                val = ticks(k);
+                % Normalized display position (0=bottom, 1=top of axes)
+                if reversed
+                    norm_y = (ylim(2) - val) / span;
+                else
+                    norm_y = (val - ylim(1)) / span;
+                end
+                if norm_y < -0.05 || norm_y > 1.05; continue; end
+
+                label = app.smartFormatTick(val, ticks);
+
+                % x=0 is the axes left edge in axes-normalized units.
+                % HorizontalAlignment='right' + Clipping='off' draws the
+                % label to the LEFT of the axes, into the 68-px padding.
+                t = text(ax, 0, norm_y, [label ' '], ...
+                    'Units',               'normalized', ...
+                    'HorizontalAlignment', 'right', ...
+                    'VerticalAlignment',   'middle', ...
+                    'Clipping',            'off', ...
+                    'FontSize',            app.AxesTickFontSize, ...
+                    'Color',               [0.15 0.15 0.15]);
+                handles(end+1) = t; %#ok<AGROW>
+            end
+
+            app.YTickTextHandles{rowIdx} = handles;
+        end
+
+        function s = smartFormatTick(app, val, allTicks) %#ok<INUSL>
+            % Natural tick formatting:
+            %   • Scientific (%.3e) for magnitudes >= 10000 or < 0.01
+            %   • Fixed with just enough decimal places otherwise
+            % Width is irrelevant — alignment comes from blank YTickLabel.
+            if ~isfinite(val); s = ''; return; end
+            if val == 0;       s = '0'; return; end
+
+            finTicks = allTicks(isfinite(allTicks) & allTicks ~= 0);
+            if isempty(finTicks)
+                maxAbs = abs(val);
+            else
+                maxAbs = max(abs(finTicks));
+            end
+
+            if maxAbs >= 10000 || maxAbs < 0.01
+                s = sprintf('%.3e', val);
+                return;
+            end
+
+            % Fixed: pick decimal places from the tick spacing
+            sorted = sort(allTicks(isfinite(allTicks)));
+            if numel(sorted) >= 2
+                steps = abs(diff(sorted));
+                step  = min(steps(steps > 0));
+            else
+                step = maxAbs;
+            end
+
+            if     step >= 50,    s = sprintf('%.0f', val);
+            elseif step >= 5,     s = sprintf('%.1f', val);
+            elseif step >= 0.5,   s = sprintf('%.2f', val);
+            elseif step >= 0.05,  s = sprintf('%.3f', val);
+            else,                 s = sprintf('%.4f', val);
+            end
+        end
+
+    end
+end
