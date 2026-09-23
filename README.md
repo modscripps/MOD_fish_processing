@@ -2,7 +2,7 @@
 
 Two standalone MATLAB App Designer-style GUIs for browsing processed fish
 data: `MODvis_timeseries.m` and `MODvis_spectra.m`. Both live in
-`visualization/matlab/` and only depend on the handful of `processing/scans/*.m`
+`visualization/` and only depend on the handful of `processing/scans/*.m`
 functions included in this branch - no other part of the repo is required to
 run them.
 
@@ -33,12 +33,12 @@ run them from the MATLAB command line or a script, not the App Designer.
 
 ### From the folder you want to browse
 
-Add `visualization/matlab/` and `processing/scans/` to your MATLAB path, optionally
+Add `visualization/` and `processing/scans/` to your MATLAB path, optionally
 `cd` into the folder of `.mat` files you want to browse, then construct the
 app with no arguments - it defaults to `pwd`:
 
 ```matlab
-addpath('visualization/matlab', 'processing/scans')
+addpath('visualization', 'processing/scans')
 MODvis_timeseries;
 % or
 MODvis_spectra;
