@@ -118,27 +118,47 @@ Setup** shows the changes, then:
 
 `fctd_epsi` only reads `Setup` when it starts, so restart it afterwards.
 
+The window warns if the vehicle name and fish type disagree (MAKO or EPSI
+in the name with FCTD selected, or FCTD in the name with EPSI selected).
+
+**Advanced settings** (ports, network, CTD data, raw files, calibration
+paths, and where `setup.yml` and the deployment log go) default to
+`config.yml`. Changes there apply to that window only - edit `config.yml`
+to change them for good.
+
 Raw file names start with the fish type - `EPSI...` for a Mako, `FCTD...`
 for an FCTD - so the prefix can't be left on the wrong one.
 
 **Create Setup** also saves what you entered for that vehicle, so picking
 the vehicle next time fills in the same probes, CTD and pressure case. Every
 serial number used is also added to that sensor type's dropdown.
-**Load current Setup** only fills the window from the `Setup` that's there
-now - it doesn't write or save anything.
+The window opens filled in from the current `Setup` (or the first vehicle
+preset if there isn't one), and warns if the survey date isn't today, so an
+old survey name doesn't get reused by accident. **Load current Setup** fills
+the window from the `Setup` again - it doesn't write or save anything.
 
 ### Setting it up on the acquisition Mac
 
 1. Needs `python3` with tkinter (python.org or miniconda; nothing to pip
    install).
 2. Edit `acquisition/config.yml` once per cruise: where `fctd_epsi`/`Setup`
-   live, the calibration folders, where processed data and the deployment
-   log go, and the deck hardware shared by every vehicle (serial ports, baud
-   rates, raw file prefix and folder).
-3. Check `acquisition/presets/*.yml` - one per vehicle (MAKO1, MAKO2, FCTD1,
-   FCTD2: fish type, pressure case, CTD, default AFE slot layout). MAKO2 has
-   no serial numbers yet - the window asks for them the first time. Add a
-   vehicle by copying one. The
+   live, the shear/FP07/CTD calibration folders, where processed data and the
+   deployment log go, and the deck hardware shared by every vehicle (serial
+   ports, baud rates, raw data folder). Use network paths
+   (`/Volumes/DEV1_HD/...`, `/Volumes/DEV3_HD/...`) so they're the same from
+   every computer. The calibration folders are written into `Setup` -
+   `fctd_epsi` reads `<FP07 folder>/<SN>/Calibration_<SN>.txt` (slots 1-2),
+   the shear folder (slots 3-4) and `<CTD folder>/<SN>.CAL`, and records N/A
+   for any it can't find - and they fill the serial number lists. setup.yml's
+   `calibrations_root` is the folder above `SHEAR_PROBES`; processing also
+   reads the CTD calibration from `SBE/<SN>.CAL` there, so copy the `.CAL`
+   files in once: `mkdir -p <CALIBRATION>/SBE && cp <SBECAL>/*.CAL <CALIBRATION>/SBE/`
+3. Check `acquisition/presets/*.yml` - one per vehicle (MAKO1-3, FCTD1-3:
+   fish type, pressure case, CTD, default AFE slot layout). MAKO2 and MAKO3
+   have no serial numbers yet - the window asks for them the first time. A
+   vehicle can also be typed into the Vehicle box; it's remembered (and added
+   to the list) after its first Create Setup. To give it defaults from the
+   start, copy a preset file. The
    window remembers the last-used probes per vehicle in
    `acquisition/last_used.json`.
 4. Make an alias of `acquisition/Start New Deployment.command` on the

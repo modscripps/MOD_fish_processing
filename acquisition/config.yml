@@ -1,25 +1,16 @@
-# Start New Deployment - cruise-level settings. Edit once per cruise, on the
-# acquisition Mac (the one that runs ./fctd_epsi). Paths are as seen from that
-# Mac unless the comment says otherwise.
+# Start New Deployment - cruise-level settings. Edit once per cruise.
+# Paths use the network names (/Volumes/DEV1_HD/..., /Volumes/DEV3_HD/...) so
+# they are the same from every computer - on DEV1 itself, /Volumes/DEV1_HD is
+# its own disk.
 
-# Folder holding fctd_epsi and its Setup file
-setup_dir: /Users/Shared/Software_current_cruise/MOD_fish_lib/Acquisition/fctd_epsi_acq/build/fctd_epsi/Build/Products/Debug
+# Folder holding fctd_epsi and its Setup file (DEV1)
+setup_dir: /Volumes/DEV1_HD/Users/Shared/Software_current_cruise/MOD_fish_lib/Acquisition/fctd_epsi_acq/build/fctd_epsi/Build/Products/Debug
 
-# Calibration folders - used for the probe/CTD serial number dropdowns
-acq_calibration_root: /Users/Shared/Software_current_cruise/MOD_fish_lib/EPSILOMETER/CALIBRATION
-acq_sbecal_dir: /Users/Shared/Software_current_cruise/MOD_fish_lib/Acquisition/SBECAL
-
-# Processed data. processed_root is as seen from the PROCESSING computer (it
-# goes into setup.yml's data_root). processed_root_here is the same folder as
-# seen from this Mac (where setup.yml is written); leave it blank if the path
-# is the same on both.
+# Processed data (DEV3): setup.yml goes in <processed_root>/<survey>/meta/
 processed_root: /Volumes/DEV3_HD/Users/Shared/EPSI_PROCESSING/Current_Cruise/Processed
-processed_root_here:
-# calibrations_root in setup.yml (processing computer): holds SBE/<SN>.CAL and SHEAR_PROBES/<SN>/
-calibrations_root: /Volumes/scienceparty_share/RR2609/MOD/08_software_used_in_cruise/MOD_fish_lib/EPSILOMETER/CALIBRATION
 
-# One row per Start New Deployment click
-deployment_log: /Users/Shared/FCTD_EPSI_DATA/Current_Cruise/deployment_log.csv
+# One row per Create Setup
+deployment_log: /Volumes/DEV3_HD/Users/Shared/EPSI_PROCESSING/Current_Cruise/Processed/deployment_log.csv
 
 # Defaults for the window
 cruise: MURI
@@ -27,13 +18,17 @@ experiment: MURI_2026
 latitude: 35
 
 # --- Setup values shared by every vehicle (deck hardware) ---
-# Calibration paths written into Setup
-shear_cal_path: /Users/Shared/Software_current_cruise/MOD_fish_lib/EPSILOMETER/CALIBRATION/SHEAR_PROBES
-fpo7_cal_path: /Users/Shared/Software_current_cruise/MOD_fish_lib/EPSILOMETER/CALIBRATION/FPO7_PROBES
-ctd_cal_path: /Users/Shared/Software_current_cruise/MOD_fish_lib/Acquisition/SBECAL
+# Calibration folders, written into Setup. fctd_epsi reads
+# <FP07 folder>/<SN>/Calibration_<SN>.txt for slots 1-2, the shear folder for
+# slots 3-4, and <CTD folder>/<SN>.CAL. The window lists serial numbers from
+# them, and setup.yml's calibrations_root is the folder above SHEAR_PROBES
+# (processing also needs <that folder>/SBE/<SN>.CAL).
+shear_cal_path: /Volumes/DEV1_HD/Users/Shared/Software_current_cruise/MOD_fish_lib/EPSILOMETER/CALIBRATION/SHEAR_PROBES
+fpo7_cal_path: /Volumes/DEV1_HD/Users/Shared/Software_current_cruise/MOD_fish_lib/EPSILOMETER/CALIBRATION/FPO7
+ctd_cal_path: /Volumes/DEV1_HD/Users/Shared/Software_current_cruise/MOD_fish_lib/Acquisition/SBECAL
 # Serial ports
-ctd_port: /dev/tty.usbserial-AV0K4NN9
 command_port: /dev/tty.usbserial-FTU7BXC3
+ctd_port: /dev/tty.usbserial-AV0K4NN9
 speed: 230400
 pcode_in_use: true
 pcode_port: /dev/tty.usbserial-FT3T18M2

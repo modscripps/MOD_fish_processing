@@ -347,23 +347,38 @@ def validate(values, config=None):
             errors.append('Setup would be %d bytes; fctd_epsi overflows above ~%d' % (size, MAX_SETUP_BYTES))
 
     # Warnings
+    veh, flag = str(values.get('vehicle', '')).upper(), values.get('fish_flag')
+    if flag == 'FCTD' and ('MAKO' in veh or 'EPSI' in veh):
+        warnings.append('Vehicle %s looks like a Mako, but fish type is FCTD' % values.get('vehicle'))
+    elif flag == 'EPSI' and 'FCTD' in veh:
+        warnings.append('Vehicle %s looks like an FCTD, but fish type is EPSI' % values.get('vehicle'))
+    # Calibration files, looked up the way fctd_epsi does (ctd.c InitFishCTD):
+    # slots 1-2 in the FP07 folder and slots 3-4 in the shear folder (by slot,
+    # not sensor type), as <folder>/<SN>/Calibration_<SN>.txt, and the CTD as
+    # <CTD folder>/<SN>.CAL. A missing file isn't fatal - fctd_epsi records
+    # N/A for that probe in the .modraw header.
+    v = setup_values(values)
+    folders = {'fpo7_cal_path': 'FP07', 'shear_cal_path': 'Shear probe', 'ctd_cal_path': 'CTD'}
+    for key, label in folders.items():
+        d = v.get(key, '')
+        if d and not os.path.isdir(d):
+            warnings.append('%s calibration folder not found: %s' % (label, d))
+    for i in range(1, 5):
+        t, sn = v.get('ch%d_type' % i), v['ch%d_sn' % i]
+        d = v.get('fpo7_cal_path' if i <= 2 else 'shear_cal_path', '')
+        if t in ('fpo7', 'shear') and d and os.path.isdir(d) \
+                and not os.path.isfile(os.path.join(d, sn, 'Calibration_%s.txt' % sn)):
+            warnings.append('Slot %d (%s): no %s/%s/Calibration_%s.txt - fctd_epsi will record N/A for it'
+                            % (i, names[i - 1], d, sn, sn))
+    ctd_dir, ctd_sn = v.get('ctd_cal_path', ''), v.get('ctd_sn', '')
+    if ctd_dir and ctd_sn and os.path.isdir(ctd_dir) and not os.path.isfile(os.path.join(ctd_dir, ctd_sn + '.CAL')):
+        warnings.append('CTD %s: no %s.CAL in %s' % (ctd_sn, ctd_sn, ctd_dir))
+    # Processing (MODsetup_read_yaml.m) reads <calibrations_root>/SBE/<SN>.CAL
+    cal_root = processing_calibrations_root(v)
+    if cal_root and ctd_sn and os.path.isdir(cal_root) \
+            and not os.path.isfile(os.path.join(cal_root, 'SBE', ctd_sn + '.CAL')):
+        warnings.append('processing will need %s/SBE/%s.CAL - copy it there from %s' % (cal_root, ctd_sn, ctd_dir))
     if config:
-        cal_root = config.get('acq_calibration_root', '')
-        for i in range(1, 5):
-            t, sn = values.get('ch%d_type' % i), values.get('ch%d_sn' % i, '')
-            sub = {'fpo7': 'FPO7', 'shear': 'SHEAR_PROBES'}.get(t)
-            if sub and sn and cal_root and os.path.isdir(os.path.join(cal_root, sub)) \
-                    and not os.path.isdir(os.path.join(cal_root, sub, sn)):
-                warnings.append('channel %d (%s): no calibration folder %s/%s' % (i, names[i - 1], sub, sn))
-        sbe = config.get('acq_sbecal_dir', '')
-        ctd_sn = values.get('ctd_sn', '')
-        if sbe and ctd_sn and os.path.isdir(sbe) and not os.path.isfile(os.path.join(sbe, ctd_sn + '.CAL')):
-            warnings.append('CTD %s: no %s.CAL in %s' % (ctd_sn, ctd_sn, sbe))
-        # Processing (MODsetup_read_yaml.m) errors without calibrations_root/SBE/<SN>.CAL
-        proc_cal = config.get('calibrations_root', '')
-        if proc_cal and ctd_sn and os.path.isdir(proc_cal) \
-                and not os.path.isfile(os.path.join(proc_cal, 'SBE', ctd_sn + '.CAL')):
-            warnings.append('processing will need %s/SBE/%s.CAL (calibrations_root in config.yml)' % (proc_cal, ctd_sn))
         setup_dir = config.get('setup_dir', '')
         if setup_dir and os.path.exists(os.path.join(setup_dir, '.Setup.swp')):
             warnings.append('Setup is open in vi somewhere (.Setup.swp exists) - saving from vi would undo this')
@@ -459,7 +474,7 @@ def render_processing_yml(values, config):
         '# Same values as the Setup file fctd_epsi recorded into each .modraw header.',
         '# data_root is the only path in this file - raw/, L0/, L1/, meta/ are derived from it.',
         'data_root: %s' % yq(data_root),
-        'calibrations_root: %s' % yq(config.get('calibrations_root', '')),
+        'calibrations_root: %s' % yq(processing_calibrations_root(values)),
         'survey_name: %s' % yq(survey),
         'cruise: %s' % yq(values.get('cruise', '')),
         'experiment: %s' % yq(values.get('experiment', '')),
@@ -535,10 +550,9 @@ def check_roundtrip(setup_path, values):
 
 
 def processing_yml_path(values, config):
-    """Where this computer writes setup.yml: processed_root_here (the same
-    folder as seen from the acquisition Mac), else processed_root."""
-    root = config.get('processed_root_here') or config['processed_root']
-    return os.path.join(root, values['survey'], 'meta', 'setup.yml')
+    """setup.yml goes in <processed_root>/<survey>/meta/. processed_root is a
+    network path (e.g. /Volumes/DEV3_HD/...) that's the same from every computer."""
+    return os.path.join(config['processed_root'], values['survey'], 'meta', 'setup.yml')
 
 
 LOG_FIELDS = ['utc_written', 'survey', 'vehicle', 'fish_flag', 'fish_pc', 'ctd_sn',
@@ -573,7 +587,7 @@ def write_all(values, config, write_yml=True):
     if bad:
         raise ValueError('Setup was written but does not read back correctly:\n' + '\n'.join(bad))
 
-    if write_yml and (config.get('processed_root_here') or config.get('processed_root')):
+    if write_yml and config.get('processed_root'):
         yml_path = processing_yml_path(values, config)
         os.makedirs(os.path.dirname(yml_path), exist_ok=True)
         if os.path.isfile(yml_path):
@@ -604,12 +618,16 @@ def write_all(values, config, write_yml=True):
 # --------------------------------------------------------------------------
 # Lists for dropdowns
 # --------------------------------------------------------------------------
-def list_probe_sns(cal_root, sensor_type):
-    sub = {'fpo7': 'FPO7', 'shear': 'SHEAR_PROBES'}.get(sensor_type)
-    if not sub or not cal_root:
-        return []
-    d = os.path.join(cal_root, sub)
-    if not os.path.isdir(d):
+def processing_calibrations_root(values):
+    """calibrations_root for setup.yml: the folder holding SHEAR_PROBES/ (processing
+    reads <root>/SHEAR_PROBES/<SN>/ and <root>/SBE/<SN>.CAL)."""
+    p = str(values.get('shear_cal_path', '')).rstrip('/')
+    return os.path.dirname(p) if p else ''
+
+
+def list_probe_sns(d):
+    """Probe serial numbers = the subfolders of a calibration folder."""
+    if not d or not os.path.isdir(d):
         return []
     return sorted((n for n in os.listdir(d) if os.path.isdir(os.path.join(d, n)) and not n.startswith('.')),
                   key=lambda s: (len(s), s))
