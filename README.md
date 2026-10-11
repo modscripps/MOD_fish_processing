@@ -121,10 +121,11 @@ Setup** shows the changes, then:
 Raw file names start with the fish type - `EPSI...` for a Mako, `FCTD...`
 for an FCTD - so the prefix can't be left on the wrong one.
 
-**Load current Setup** fills the window from the `Setup` that's there now
-(e.g. after a probe was swapped by hand) and saves it as that vehicle's
-remembered values, so the new probe fills in next time the vehicle is picked.
-Every serial number used is also added to that sensor type's dropdown.
+**Create Setup** also saves what you entered for that vehicle, so picking
+the vehicle next time fills in the same probes, CTD and pressure case. Every
+serial number used is also added to that sensor type's dropdown.
+**Load current Setup** only fills the window from the `Setup` that's there
+now - it doesn't write or save anything.
 
 ### Setting it up on the acquisition Mac
 

@@ -241,13 +241,19 @@ class StartNewDeployment:
         self.msg.tag_configure('warn', foreground='#a05a00')
         self.msg.tag_configure('ok', foreground='#1b6e20')
         self.msg.pack(fill='both', expand=True, **pad)
-        btns = ttk.Frame(outer)
-        btns.pack(fill='x', **pad)
-        ttk.Button(btns, text='Load current Setup', command=self.load_current_setup).pack(side='left')
-        self.create_btn = ttk.Button(btns, text='Create Setup', command=self.create)
-        self.create_btn.pack(side='right')
-        ttk.Label(btns, text='Setup: ' + os.path.join(self.config.get('setup_dir', '?'), 'Setup'),
-                  foreground='#777').pack(side='left', padx=12)
+        # Create Setup is the point of this window, so it's the one colored
+        # button. A Label rather than a Button because macOS buttons ignore colors.
+        self.create_btn = tk.Label(outer, text='Create Setup', font=('TkDefaultFont', 14, 'bold'),
+                                   fg='white', bg='#1b6e20', padx=16, pady=4, cursor='hand2')
+        self.create_btn.pack(anchor='w', padx=6, pady=(6, 2))
+        self.create_btn.bind('<Button-1>', lambda e: self.create())
+        ttk.Label(outer, text='Writes ' + os.path.join(self.config.get('setup_dir', '?'), 'Setup'),
+                  foreground='#777').pack(anchor='w', padx=6)
+        load = ttk.Frame(outer)
+        load.pack(fill='x', padx=6, pady=(12, 0))
+        ttk.Button(load, text='Load current Setup', command=self.load_current_setup).pack(side='left')
+        ttk.Label(load, text="Fill this form from the Setup that's there now. Doesn't write or save anything.",
+                  foreground='#777', wraplength=520).pack(side='left', padx=8)
 
     def toggle_advanced(self):
         if self.adv_shown.get():
@@ -286,15 +292,12 @@ class StartNewDeployment:
             rest = rest[len(veh) + 1:]
         v['survey_date'], v['survey_desc'] = date, rest
         self.set_values(v)
-        # Make what's in Setup now (e.g. a probe swapped by hand) the
-        # vehicle's remembered values, so it fills in next time.
         if match:
-            self.save_last_used(self.values())
-            self.status('Loaded the current Setup and saved its probes as the defaults for %s.' % match[0])
+            self.status('Filled in from the current Setup. Nothing is saved until you click Create Setup.')
         else:
-            self.status('Loaded the current Setup. Its vehicle "%s" has no preset, so nothing was saved '
-                        'as defaults - add presets/%s.yml to remember it.'
-                        % (v.get('vehicle', ''), str(v.get('vehicle', '')).lower()), 'warn')
+            self.status('Filled in from the current Setup. Its vehicle "%s" has no preset - pick a vehicle '
+                        'above (or add presets/%s.yml).' % (v.get('vehicle', ''), str(v.get('vehicle', '')).lower()),
+                        'warn')
 
     def status(self, text, tag='ok'):
         self.msg.config(state='normal')
@@ -343,7 +346,10 @@ class StartNewDeployment:
         if not errors:
             self.msg.insert('end', 'Ready to create Setup for %s.\n' % survey, 'ok')
         self.msg.config(state='disabled')
-        self.create_btn.config(state='disabled' if errors else 'normal')
+        self.create_enabled = not errors
+        self.create_btn.config(bg='#1b6e20' if self.create_enabled else '#9e9e9e',
+                               text='Create Setup' if self.create_enabled else 'Create Setup  (fix the errors above)',
+                               cursor='hand2' if self.create_enabled else 'arrow')
 
     def create(self):
         v = self.values()
