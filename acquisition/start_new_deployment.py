@@ -362,27 +362,42 @@ class StartNewDeployment:
         dlg = tk.Toplevel(self.root)
         dlg.title('Write this Setup?')
         dlg.transient(self.root)
-        ttk.Label(dlg, text='Changes to %s:' % setup_path, padding=8).pack(anchor='w')
-        txt = tk.Text(dlg, width=100, height=30, font=('TkFixedFont', 11))
-        for line in diff.splitlines(True):
+        # Buttons and notes are packed at the bottom first so they always
+        # show; the diff gets whatever height is left, with a scrollbar.
+        b = ttk.Frame(dlg, padding=8)
+        b.pack(side='bottom', fill='x')
+        ttk.Button(b, text='Cancel', command=dlg.destroy).pack(side='right')
+        ttk.Button(b, text='Write Setup', command=lambda: self.do_write(dlg, v)).pack(side='right', padx=8)
+        if warnings:
+            ttk.Label(dlg, text='%d warning(s) - see the main window.' % len(warnings), foreground='#a05a00',
+                      padding=(8, 0)).pack(side='bottom', anchor='w')
+        yml = msf.processing_yml_path(v, self.config) if (self.config.get('processed_root') or
+                                                         self.config.get('processed_root_here')) else ''
+        note = 'Also writes %s%s' % (yml, ' (an existing one is kept as .replaced_*)' if yml and os.path.isfile(yml) else '')
+        ttk.Label(dlg, text=note, padding=8, wraplength=700).pack(side='bottom', anchor='w')
+
+        ttk.Label(dlg, text='Changes to %s:' % setup_path, padding=(8, 8, 8, 0)).pack(anchor='w')
+        legend = ttk.Frame(dlg, padding=(8, 2))
+        legend.pack(anchor='w')
+        tk.Label(legend, text='- red: removed from the current Setup', fg='#b00020').pack(side='left')
+        tk.Label(legend, text='    + green: added', fg='#1b6e20').pack(side='left')
+        tk.Label(legend, text='    black: unchanged (shown for context)', fg='#555').pack(side='left')
+        box = ttk.Frame(dlg)
+        box.pack(fill='both', expand=True, padx=8)
+        lines = diff.splitlines(True)
+        fit = max(10, (self.root.winfo_screenheight() - 300) // 18)
+        txt = tk.Text(box, width=100, height=min(len(lines) + 1, fit), font=('TkFixedFont', 11))
+        sb = ttk.Scrollbar(box, orient='vertical', command=txt.yview)
+        txt.configure(yscrollcommand=sb.set)
+        sb.pack(side='right', fill='y')
+        txt.pack(side='left', fill='both', expand=True)
+        for line in lines:
             tag = 'add' if line.startswith('+') and not line.startswith('+++') else \
                   'del' if line.startswith('-') and not line.startswith('---') else ''
             txt.insert('end', line, tag)
         txt.tag_configure('add', foreground='#1b6e20')
         txt.tag_configure('del', foreground='#b00020')
         txt.config(state='disabled')
-        txt.pack(fill='both', expand=True, padx=8)
-        yml = msf.processing_yml_path(v, self.config) if (self.config.get('processed_root') or
-                                                         self.config.get('processed_root_here')) else ''
-        note = 'Also writes %s%s' % (yml, ' (an existing one is kept as .replaced_*)' if yml and os.path.isfile(yml) else '')
-        ttk.Label(dlg, text=note, padding=8, wraplength=700).pack(anchor='w')
-        if warnings:
-            ttk.Label(dlg, text='%d warning(s) - see the main window.' % len(warnings), foreground='#a05a00',
-                      padding=(8, 0)).pack(anchor='w')
-        b = ttk.Frame(dlg, padding=8)
-        b.pack(fill='x')
-        ttk.Button(b, text='Cancel', command=dlg.destroy).pack(side='right')
-        ttk.Button(b, text='Write Setup', command=lambda: self.do_write(dlg, v)).pack(side='right', padx=8)
         dlg.grab_set()
 
     def do_write(self, dlg, v):
