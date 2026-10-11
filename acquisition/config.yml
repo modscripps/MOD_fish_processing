@@ -13,7 +13,7 @@ acq_sbecal_dir: /Users/Shared/Software_current_cruise/MOD_fish_lib/Acquisition/S
 # goes into setup.yml's data_root). processed_root_here is the same folder as
 # seen from this Mac (where setup.yml is written); leave it blank if the path
 # is the same on both.
-processed_root: /Volumes/scienceparty_share/RR2609/MOD/03_raw_data
+processed_root: /Volumes/DEV3_HD/Users/Shared/EPSI_PROCESSING/Current_Cruise/Processed
 processed_root_here:
 # calibrations_root in setup.yml (processing computer): holds SBE/<SN>.CAL and SHEAR_PROBES/<SN>/
 calibrations_root: /Volumes/scienceparty_share/RR2609/MOD/08_software_used_in_cruise/MOD_fish_lib/EPSILOMETER/CALIBRATION
