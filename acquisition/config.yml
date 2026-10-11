@@ -1,0 +1,52 @@
+# Start New Deployment - cruise-level settings. Edit once per cruise, on the
+# acquisition Mac (the one that runs ./fctd_epsi). Paths are as seen from that
+# Mac unless the comment says otherwise.
+
+# Folder holding fctd_epsi and its Setup file
+setup_dir: /Users/Shared/Software_current_cruise/MOD_fish_lib/Acquisition/fctd_epsi_acq/build/fctd_epsi/Build/Products/Debug
+
+# Calibration folders - used for the probe/CTD serial number dropdowns
+acq_calibration_root: /Users/Shared/Software_current_cruise/MOD_fish_lib/EPSILOMETER/CALIBRATION
+acq_sbecal_dir: /Users/Shared/Software_current_cruise/MOD_fish_lib/Acquisition/SBECAL
+
+# Processed data. processed_root is as seen from the PROCESSING computer (it
+# goes into setup.yml's data_root). processed_root_here is the same folder as
+# seen from this Mac (where setup.yml is written); leave it blank if the path
+# is the same on both.
+processed_root: /Volumes/scienceparty_share/RR2609/MOD/03_raw_data
+processed_root_here:
+# calibrations_root in setup.yml (processing computer): holds SBE/<SN>.CAL and SHEAR_PROBES/<SN>/
+calibrations_root: /Volumes/scienceparty_share/RR2609/MOD/08_software_used_in_cruise/MOD_fish_lib/EPSILOMETER/CALIBRATION
+
+# One row per Start New Deployment click
+deployment_log: /Users/Shared/FCTD_EPSI_DATA/Current_Cruise/deployment_log.csv
+
+# Defaults for the window
+cruise: MURI
+experiment: MURI_2026
+latitude: 35
+
+# --- Setup values shared by every vehicle (deck hardware) ---
+# Calibration paths written into Setup
+shear_cal_path: /Users/Shared/Software_current_cruise/MOD_fish_lib/EPSILOMETER/CALIBRATION/SHEAR_PROBES
+fpo7_cal_path: /Users/Shared/Software_current_cruise/MOD_fish_lib/EPSILOMETER/CALIBRATION/FPO7_PROBES
+ctd_cal_path: /Users/Shared/Software_current_cruise/MOD_fish_lib/Acquisition/SBECAL
+# Serial ports
+ctd_port: /dev/tty.usbserial-AV0K4NN9
+command_port: /dev/tty.usbserial-FTU7BXC3
+speed: 230400
+pcode_in_use: true
+pcode_port: /dev/tty.usbserial-FT3T18M2
+pcode_speed: 4800
+# Network
+tcpip_port: 2342
+udp_in_use: true
+udp_port: 50210
+# CTD data
+ctd_length: 114
+output_format: 24
+print_data: 2
+eng_disp_rate: 8
+# Raw files (the file name prefix is the fish type: EPSI for a Mako, FCTD for an FCTD)
+data_path: /Users/Shared/FCTD_EPSI_DATA/Current_Cruise/
+file_size: 5000000

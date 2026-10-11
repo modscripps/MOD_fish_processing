@@ -9,6 +9,10 @@ included in this branch - no other part of the repo is required.
 Needs MATLAB with the Signal Processing Toolbox; raw-to-L0 conversion also
 needs the Statistics and Machine Learning Toolbox.
 
+Also here: `acquisition/`, a "Start New Deployment" window (Python) that
+writes the `Setup` file `./fctd_epsi` reads, instead of editing it in vi -
+see [Acquisition: Start New Deployment](#acquisition-start-new-deployment).
+
 ## Raw to L0
 
 ```matlab
@@ -96,3 +100,67 @@ MODvis_spectra('/path/to/L2_or_profiles_folder');
 % or
 MODvis_spectra_L0('/path/to/L0_folder');
 ```
+
+## Acquisition: Start New Deployment
+
+`acquisition/start_new_deployment.py` opens a window for starting a
+deployment: pick the vehicle (most fields fill in from its preset), set what
+is on each AFE slot and its serial number, and build the survey name. **Create
+Setup** shows the changes, then:
+
+- backs up the current `Setup` as `Setup_replaced_YYYYMMDDHHMMSS` and writes
+  the new one next to `fctd_epsi`, then reads it back the way `fctd_epsi`
+  does to check every value,
+- writes `<processed_root>/<survey>/meta/setup.yml` for MOD_fish_processing
+  (all 7 AFE slots with names, types and serial numbers; an existing one is
+  kept as `setup.yml.replaced_*`),
+- appends a row to the cruise `deployment_log.csv`.
+
+`fctd_epsi` only reads `Setup` when it starts, so restart it afterwards.
+
+Raw file names start with the fish type - `EPSI...` for a Mako, `FCTD...`
+for an FCTD - so the prefix can't be left on the wrong one.
+
+**Load current Setup** fills the window from the `Setup` that's there now
+(e.g. after a probe was swapped by hand) and saves it as that vehicle's
+remembered values, so the new probe fills in next time the vehicle is picked.
+Every serial number used is also added to that sensor type's dropdown.
+
+### Setting it up on the acquisition Mac
+
+1. Needs `python3` with tkinter (python.org or miniconda; nothing to pip
+   install).
+2. Edit `acquisition/config.yml` once per cruise: where `fctd_epsi`/`Setup`
+   live, the calibration folders, where processed data and the deployment
+   log go, and the deck hardware shared by every vehicle (serial ports, baud
+   rates, raw file prefix and folder).
+3. Check `acquisition/presets/*.yml` - one per vehicle (MAKO1, MAKO2, FCTD1,
+   FCTD2: fish type, pressure case, CTD, default AFE slot layout). MAKO2 has
+   no serial numbers yet - the window asks for them the first time. Add a
+   vehicle by copying one. The
+   window remembers the last-used probes per vehicle in
+   `acquisition/last_used.json`.
+4. Make an alias of `acquisition/Start New Deployment.command` on the
+   Desktop and double-click it.
+
+### AFE slots
+
+Slots 1-4 each take FP07, shear, fluorometer, microconductivity or none;
+slots 5-7 are always the accelerometers a1-a3. Names follow slot order (t1/t2,
+s1/s2, f1, c1). An empty slot is written as serial number `000` in `Setup`
+and keeps its standard name with `type: none` in setup.yml, so slot positions
+never shift. `Setup` also records each slot's type (`CTD.chN_type`), which
+`fctd_epsi` ignores but copies into every `.modraw` header.
+
+### Rules `Setup` has to follow
+
+From `fctd_epsi`'s source (`main.c` ReadSetupFile, `file_utils.c`,
+`ctd.h`, `fctd_epsi.c`); the window enforces all of them:
+
+- No empty value for any key `fctd_epsi` reads (`KEY=''` makes it segfault -
+  why the earlier `convert_yaml_to_setup.py` output crashed it).
+- Values can't contain spaces, `'`, `,`, `=`, `#` or `//`.
+- Names (survey, vehicle, probe serial numbers, ports, ...) are at most 31
+  characters - longer ones silently run into the next field.
+- The whole file must stay under ~2000 bytes (it is copied into every
+  `.modraw` header through a fixed-size buffer).

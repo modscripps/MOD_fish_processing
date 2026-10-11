@@ -1,0 +1,412 @@
+"""start_new_deployment - Part of MOD_fish_processing
+
+The "Start New Deployment" window. Pick the vehicle (most fields fill in from
+its preset), set the probes on each AFE slot, build the survey name, and
+click Create Setup. That writes the Setup file ./fctd_epsi reads (after
+backing up the old one), the processing setup.yml for MOD_fish_processing,
+and a row in the cruise deployment log. See mod_setup_file.py for the rules
+the Setup file has to follow, and README.md for setup.
+
+Run:  python3 start_new_deployment.py      (or double-click
+      "Start New Deployment.command")
+Settings come from config.yml next to this file (override with the
+START_DEPLOYMENT_CONFIG environment variable) and presets/<vehicle>.yml.
+
+Multiscale Ocean Dynamics (MOD) Group, Scripps Institution of Oceanography
+"""
+
+import datetime
+import glob
+import json
+import os
+import re
+import sys
+import tkinter as tk
+from tkinter import messagebox, ttk
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import mod_setup_file as msf  # noqa: E402
+
+# Setup values that live in config.yml (deck hardware), shown under Advanced
+ADVANCED_FIELDS = [
+    ('ctd_port', 'CTD data port'), ('command_port', 'Command port'), ('speed', 'CTD baud rate'),
+    ('pcode_port', 'GPS (PCode) port'), ('pcode_speed', 'GPS baud rate'),
+    ('tcpip_port', 'TCP/IP port'), ('udp_port', 'UDP port'),
+    ('ctd_length', 'CTD length'), ('output_format', 'Output format'),
+    ('print_data', 'printData (0/1/2)'), ('eng_disp_rate', 'engDispRate'),
+    ('data_path', 'Raw data folder'), ('file_size', 'Raw file size [bytes]'),
+    ('shear_cal_path', 'Shear cal path'), ('fpo7_cal_path', 'FP07 cal path'), ('ctd_cal_path', 'CTD cal path'),
+    ('compass_sn', 'Compass SN'),
+]
+ADVANCED_FLAGS = [('pcode_in_use', 'GPS (PCode) in use'), ('udp_in_use', 'UDP broadcast in use')]
+REMEMBERED = ['fish_pc', 'ctd_sn', 'compass_sn', 'profiling_direction', 'vnav', 'alt', 'fluor'] + \
+    ['ch%d_%s' % (i, k) for i in range(1, 5) for k in ('type', 'sn')]
+TYPE_BY_LABEL = {v: k for k, v in msf.SENSOR_LABELS.items()}
+
+
+class StartNewDeployment:
+
+    def __init__(self, root, config_path):
+        self.root = root
+        self.config_path = config_path
+        self.config = msf.read_flat_yaml(config_path)
+        self.last_used_path = os.path.join(os.path.dirname(config_path), 'last_used.json')
+        self.presets = self.load_presets()
+        self.vars = {}
+        self.sn_boxes = []
+        self.name_labels = []
+        self.loading = False
+
+        root.title('Start New Deployment')
+        root.minsize(720, 600)
+        self.build()
+        names = sorted(self.presets)
+        if names:
+            self.vars['vehicle'].set(names[0])
+            self.on_vehicle()
+        self.refresh()
+
+    # ------------------------------------------------------------------ data
+    def load_presets(self):
+        presets = {}
+        for p in sorted(glob.glob(os.path.join(HERE, 'presets', '*.yml'))):
+            d = msf.read_flat_yaml(p)
+            if d.get('vehicle'):
+                presets[d['vehicle']] = d
+        return presets
+
+    def read_last_used(self):
+        try:
+            with open(self.last_used_path) as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return {}
+
+    def save_last_used(self, values):
+        """Remember this vehicle's probes etc. (filled in next time it's picked),
+        and add each slot's serial number to that sensor type's dropdown list."""
+        data = self.read_last_used()
+        data[values['vehicle']] = {k: values.get(k) for k in REMEMBERED}
+        history = data.setdefault('_sn_history', {})
+        for i in range(1, 5):
+            t, sn = values.get('ch%d_type' % i), values.get('ch%d_sn' % i)
+            if t and t != 'none' and sn and sn != '000' and sn not in history.setdefault(t, []):
+                history[t].append(sn)
+        try:
+            with open(self.last_used_path, 'w') as f:
+                json.dump(data, f, indent=1, sort_keys=True)
+        except OSError:
+            pass
+
+    def var(self, name, kind=tk.StringVar, value=''):
+        if name not in self.vars:
+            self.vars[name] = kind(value=value)
+            self.vars[name].trace_add('write', lambda *a: self.refresh())
+        return self.vars[name]
+
+    def values(self):
+        v = dict(self.config)
+        for k, var in self.vars.items():
+            val = var.get()
+            v[k] = val.strip() if isinstance(val, str) else val
+        for i in range(1, 5):
+            v['ch%d_type' % i] = TYPE_BY_LABEL.get(v.get('ch%d_type' % i), v.get('ch%d_type' % i, 'none'))
+        v['survey'] = msf.build_survey(v.get('survey_date', ''), v.get('vehicle', ''), v.get('survey_desc', ''))
+        return v
+
+    def set_values(self, d):
+        """Fill the window from a dict (preset, last-used, or a parsed Setup)."""
+        self.loading = True
+        for k, val in d.items():
+            if k in self.vars:
+                if isinstance(self.vars[k], tk.BooleanVar):
+                    self.vars[k].set(bool(val) and str(val).lower() not in ('false', '0'))
+                elif k.endswith('_type') and k.startswith('ch'):
+                    self.vars[k].set(msf.SENSOR_LABELS.get(val, val))
+                else:
+                    self.vars[k].set('' if val is None else str(val))
+        self.loading = False
+        self.refresh()
+
+    # ------------------------------------------------------------------ layout
+    def build(self):
+        pad = {'padx': 6, 'pady': 3}
+        outer = ttk.Frame(self.root, padding=10)
+        outer.pack(fill='both', expand=True)
+
+        self.banner = tk.Label(outer, text='', fg='white', bg='#b00020', anchor='w', justify='left',
+                               font=('TkDefaultFont', 13, 'bold'), padx=8, pady=4)
+
+        # Deployment
+        dep = ttk.LabelFrame(outer, text='Deployment', padding=8)
+        dep.pack(fill='x', **pad)
+        ttk.Label(dep, text='Vehicle').grid(row=0, column=0, sticky='w', **pad)
+        veh = ttk.Combobox(dep, textvariable=self.var('vehicle'), values=sorted(self.presets),
+                           state='readonly', width=14)
+        veh.grid(row=0, column=1, sticky='w', **pad)
+        veh.bind('<<ComboboxSelected>>', lambda e: self.on_vehicle())
+        ttk.Label(dep, text='Fish type').grid(row=0, column=2, sticky='e', **pad)
+        ff = ttk.Frame(dep)
+        ff.grid(row=0, column=3, sticky='w', **pad)
+        for t in ('EPSI', 'FCTD'):
+            ttk.Radiobutton(ff, text=t, value=t, variable=self.var('fish_flag')).pack(side='left')
+        self.prefix_label = ttk.Label(ff, text='', foreground='#777')
+        self.prefix_label.pack(side='left', padx=10)
+
+        ttk.Label(dep, text='Survey name').grid(row=1, column=0, sticky='w', **pad)
+        sv = ttk.Frame(dep)
+        sv.grid(row=1, column=1, columnspan=3, sticky='w', **pad)
+        okchars = (self.root.register(lambda s: re.match(r'^[A-Za-z0-9_\-]*$', s) is not None), '%P')
+        ttk.Entry(sv, textvariable=self.var('survey_date', value=datetime.datetime.utcnow().strftime('%y_%m%d')),
+                  width=8, validate='key', validatecommand=okchars).pack(side='left')
+        ttk.Label(sv, text='_').pack(side='left')
+        self.veh_part = ttk.Label(sv, text='', foreground='#555')
+        self.veh_part.pack(side='left')
+        ttk.Label(sv, text='_').pack(side='left')
+        ttk.Entry(sv, textvariable=self.var('survey_desc'), width=22, validate='key',
+                  validatecommand=okchars).pack(side='left')
+        ttk.Label(sv, text='  (date YY_MMDD UTC, then a short description)', foreground='#777').pack(side='left')
+        self.survey_preview = tk.Label(dep, text='', font=('TkFixedFont', 15, 'bold'), anchor='w')
+        self.survey_preview.grid(row=2, column=1, columnspan=3, sticky='w', **pad)
+
+        ttk.Label(dep, text='Experiment').grid(row=3, column=0, sticky='w', **pad)
+        ttk.Entry(dep, textvariable=self.var('experiment', value=self.config.get('experiment', '')),
+                  width=22).grid(row=3, column=1, sticky='w', **pad)
+        ttk.Label(dep, text='Cruise').grid(row=3, column=2, sticky='e', **pad)
+        ttk.Entry(dep, textvariable=self.var('cruise', value=self.config.get('cruise', '')),
+                  width=16).grid(row=3, column=3, sticky='w', **pad)
+
+        # Instruments
+        ins = ttk.LabelFrame(outer, text='Instruments', padding=8)
+        ins.pack(fill='x', **pad)
+        ttk.Label(ins, text='Pressure case').grid(row=0, column=0, sticky='w', **pad)
+        ttk.Entry(ins, textvariable=self.var('fish_pc'), width=14).grid(row=0, column=1, sticky='w', **pad)
+        ttk.Label(ins, text='CTD SN').grid(row=0, column=2, sticky='e', **pad)
+        ttk.Combobox(ins, textvariable=self.var('ctd_sn'), width=10,
+                     values=msf.list_ctd_sns(self.config.get('acq_sbecal_dir'))).grid(row=0, column=3, sticky='w', **pad)
+        ttk.Label(ins, text='Profiling').grid(row=0, column=4, sticky='e', **pad)
+        ttk.Combobox(ins, textvariable=self.var('profiling_direction', value='down'), values=['down', 'up'],
+                     state='readonly', width=6).grid(row=0, column=5, sticky='w', **pad)
+
+        ttk.Label(ins, text='AFE slot', font=('TkDefaultFont', 12, 'bold')).grid(row=1, column=0, sticky='w', **pad)
+        ttk.Label(ins, text='Sensor', font=('TkDefaultFont', 12, 'bold')).grid(row=1, column=1, sticky='w', **pad)
+        ttk.Label(ins, text='Name', font=('TkDefaultFont', 12, 'bold')).grid(row=1, column=2, sticky='w', **pad)
+        ttk.Label(ins, text='Serial number', font=('TkDefaultFont', 12, 'bold')).grid(row=1, column=3, sticky='w', **pad)
+        for i in range(1, 5):
+            r = i + 1
+            ttk.Label(ins, text='Slot %d' % i).grid(row=r, column=0, sticky='w', **pad)
+            cb = ttk.Combobox(ins, textvariable=self.var('ch%d_type' % i, value='none'), state='readonly', width=16,
+                              values=[msf.SENSOR_LABELS[t] for t in msf.SENSOR_TYPES])
+            cb.grid(row=r, column=1, sticky='w', **pad)
+            nl = ttk.Label(ins, text='', width=4)
+            nl.grid(row=r, column=2, sticky='w', **pad)
+            self.name_labels.append(nl)
+            sn = ttk.Combobox(ins, textvariable=self.var('ch%d_sn' % i), width=16)
+            sn.grid(row=r, column=3, sticky='w', **pad)
+            self.sn_boxes.append(sn)
+        ttk.Label(ins, text='Slots 5-7 are always the accelerometers a1-a3.',
+                  foreground='#777').grid(row=6, column=0, columnspan=4, sticky='w', **pad)
+        chk = ttk.Frame(ins)
+        chk.grid(row=7, column=0, columnspan=6, sticky='w', **pad)
+        for k, label in (('fluor', 'Separate fluorometer'), ('alt', 'Altimeter'), ('vnav', 'VectorNav')):
+            ttk.Checkbutton(chk, text=label, variable=self.var(k, tk.BooleanVar, False)).pack(side='left', padx=8)
+        ttk.Label(ins, text='Latitude').grid(row=8, column=0, sticky='w', **pad)
+        ttk.Entry(ins, textvariable=self.var('latitude', value=self.config.get('latitude', '')),
+                  width=8).grid(row=8, column=1, sticky='w', **pad)
+
+        # Advanced (collapsed)
+        self.adv_shown = tk.BooleanVar(value=False)
+        ttk.Checkbutton(outer, text='Show advanced settings (ports, file settings, calibration paths)',
+                        variable=self.adv_shown, command=self.toggle_advanced).pack(anchor='w', **pad)
+        self.adv = ttk.LabelFrame(outer, text='Advanced - normally left alone (defaults from config.yml)', padding=8)
+        ports = msf.list_serial_ports()
+        for n, (k, label) in enumerate(ADVANCED_FIELDS):
+            r, c = divmod(n, 2)
+            ttk.Label(self.adv, text=label).grid(row=r, column=2 * c, sticky='w', **pad)
+            if k.endswith('_port') and k not in ('tcpip_port', 'udp_port'):
+                w = ttk.Combobox(self.adv, textvariable=self.var(k, value=self.config.get(k, '')), values=ports, width=30)
+            else:
+                w = ttk.Entry(self.adv, textvariable=self.var(k, value=self.config.get(k, '')), width=32)
+            w.grid(row=r, column=2 * c + 1, sticky='w', **pad)
+        fl = ttk.Frame(self.adv)
+        fl.grid(row=len(ADVANCED_FIELDS) // 2 + 1, column=0, columnspan=4, sticky='w', **pad)
+        for k, label in ADVANCED_FLAGS:
+            default = self.config.get(k, True)
+            ttk.Checkbutton(fl, text=label, variable=self.var(k, tk.BooleanVar, bool(default))).pack(side='left', padx=8)
+
+        # Messages + buttons
+        self.msg = tk.Text(outer, height=7, wrap='word', relief='flat', background=self.root.cget('background'))
+        self.msg.tag_configure('err', foreground='#b00020')
+        self.msg.tag_configure('warn', foreground='#a05a00')
+        self.msg.tag_configure('ok', foreground='#1b6e20')
+        self.msg.pack(fill='both', expand=True, **pad)
+        btns = ttk.Frame(outer)
+        btns.pack(fill='x', **pad)
+        ttk.Button(btns, text='Load current Setup', command=self.load_current_setup).pack(side='left')
+        self.create_btn = ttk.Button(btns, text='Create Setup', command=self.create)
+        self.create_btn.pack(side='right')
+        ttk.Label(btns, text='Setup: ' + os.path.join(self.config.get('setup_dir', '?'), 'Setup'),
+                  foreground='#777').pack(side='left', padx=12)
+
+    def toggle_advanced(self):
+        if self.adv_shown.get():
+            self.adv.pack(fill='x', padx=6, pady=3, before=self.msg)
+        else:
+            self.adv.pack_forget()
+
+    # ------------------------------------------------------------------ events
+    def on_vehicle(self):
+        name = self.vars['vehicle'].get()
+        d = dict(self.presets.get(name, {}))
+        d.update({k: v for k, v in self.read_last_used().get(name, {}).items() if v is not None})
+        self.set_values(d)
+
+    def load_current_setup(self):
+        path = os.path.join(self.config.get('setup_dir', ''), 'Setup')
+        if not os.path.isfile(path):
+            messagebox.showerror('Start New Deployment', 'No Setup file at\n%s' % path)
+            return
+        v = msf.setup_to_values(msf.parse_setup(path))
+        for k in ('ch1_type', 'ch2_type', 'ch3_type', 'ch4_type'):
+            v.setdefault(k, None)
+        if not v.get('ch1_type'):    # file written before slot types were recorded
+            default = ['fpo7', 'fpo7', 'shear', 'shear'] if v.get('fish_flag') == 'EPSI' else ['none'] * 4
+            for i in range(4):
+                v['ch%d_type' % (i + 1)] = default[i]
+        match = [p for p in self.presets if p.lower() == str(v.get('vehicle', '')).lower()]
+        if match:
+            self.vars['vehicle'].set(match[0])
+            v['vehicle'] = match[0]
+        survey = v.pop('survey', '')
+        m = re.match(r'^(\d\d_\d{4})_(.*)$', survey)
+        date, rest = (m.group(1), m.group(2)) if m else (datetime.datetime.utcnow().strftime('%y_%m%d'), survey)
+        veh = str(v.get('vehicle', '')).lower()
+        if rest.lower().startswith(veh + '_'):
+            rest = rest[len(veh) + 1:]
+        v['survey_date'], v['survey_desc'] = date, rest
+        self.set_values(v)
+        # Make what's in Setup now (e.g. a probe swapped by hand) the
+        # vehicle's remembered values, so it fills in next time.
+        if match:
+            self.save_last_used(self.values())
+            self.status('Loaded the current Setup and saved its probes as the defaults for %s.' % match[0])
+        else:
+            self.status('Loaded the current Setup. Its vehicle "%s" has no preset, so nothing was saved '
+                        'as defaults - add presets/%s.yml to remember it.'
+                        % (v.get('vehicle', ''), str(v.get('vehicle', '')).lower()), 'warn')
+
+    def status(self, text, tag='ok'):
+        self.msg.config(state='normal')
+        self.msg.insert('1.0', text + '\n', tag)
+        self.msg.config(state='disabled')
+
+    def refresh(self):
+        if self.loading or not hasattr(self, 'msg'):
+            return
+        v = self.values()
+        self.veh_part.config(text=v.get('vehicle', '').lower() or '<vehicle>')
+        prefix = msf.raw_file_prefix(v)
+        self.prefix_label.config(text='raw files: %s%s_...' % (prefix, datetime.datetime.utcnow().strftime('%y_%m_%d')))
+        names = msf.slot_names(v)
+        cal_root = self.config.get('acq_calibration_root', '')
+        history = self.read_last_used().get('_sn_history', {})
+        for i in range(4):
+            t = v.get('ch%d_type' % (i + 1), 'none')
+            self.name_labels[i].config(text=names[i] if t != 'none' else '-')
+            sns = msf.list_probe_sns(cal_root, t)
+            sns = [s for s in history.get(t, []) if s not in sns] + sns
+            self.sn_boxes[i].config(values=sns, state='disabled' if t == 'none' else 'normal')
+        survey = v['survey']
+        errors, warnings = msf.validate(v, self.config)
+        survey_bad = len(survey) > msf.NAME_MAX or not msf.NAME_RE.match(survey or '-')
+        self.survey_preview.config(text='%s   (%d/%d)' % (survey, len(survey), msf.NAME_MAX),
+                                   fg='#b00020' if survey_bad else '#1b6e20')
+
+        swp = os.path.exists(os.path.join(self.config.get('setup_dir', ''), '.Setup.swp'))
+        if not os.path.isdir(self.config.get('setup_dir', '')):
+            self.banner.config(text='Setup folder not found: %s - check setup_dir in config.yml'
+                               % self.config.get('setup_dir', ''))
+            self.banner.pack(fill='x', before=self.banner.master.winfo_children()[1])
+        elif swp:
+            self.banner.config(text='Setup is open in vi somewhere (.Setup.swp). Quit vi without saving before using this.')
+            self.banner.pack(fill='x', before=self.banner.master.winfo_children()[1])
+        else:
+            self.banner.pack_forget()
+
+        self.msg.config(state='normal')
+        self.msg.delete('1.0', 'end')
+        for e in errors:
+            self.msg.insert('end', 'ERROR: ' + e + '\n', 'err')
+        for w in warnings:
+            self.msg.insert('end', 'Warning: ' + w + '\n', 'warn')
+        if not errors:
+            self.msg.insert('end', 'Ready to create Setup for %s.\n' % survey, 'ok')
+        self.msg.config(state='disabled')
+        self.create_btn.config(state='disabled' if errors else 'normal')
+
+    def create(self):
+        v = self.values()
+        errors, warnings = msf.validate(v, self.config)
+        if errors:
+            return
+        setup_path = os.path.join(self.config['setup_dir'], 'Setup')
+        diff = msf.setup_diff(setup_path, msf.render_setup(v)) or '(no change)'
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title('Write this Setup?')
+        dlg.transient(self.root)
+        ttk.Label(dlg, text='Changes to %s:' % setup_path, padding=8).pack(anchor='w')
+        txt = tk.Text(dlg, width=100, height=30, font=('TkFixedFont', 11))
+        for line in diff.splitlines(True):
+            tag = 'add' if line.startswith('+') and not line.startswith('+++') else \
+                  'del' if line.startswith('-') and not line.startswith('---') else ''
+            txt.insert('end', line, tag)
+        txt.tag_configure('add', foreground='#1b6e20')
+        txt.tag_configure('del', foreground='#b00020')
+        txt.config(state='disabled')
+        txt.pack(fill='both', expand=True, padx=8)
+        yml = msf.processing_yml_path(v, self.config) if (self.config.get('processed_root') or
+                                                         self.config.get('processed_root_here')) else ''
+        note = 'Also writes %s%s' % (yml, ' (an existing one is kept as .replaced_*)' if yml and os.path.isfile(yml) else '')
+        ttk.Label(dlg, text=note, padding=8, wraplength=700).pack(anchor='w')
+        if warnings:
+            ttk.Label(dlg, text='%d warning(s) - see the main window.' % len(warnings), foreground='#a05a00',
+                      padding=(8, 0)).pack(anchor='w')
+        b = ttk.Frame(dlg, padding=8)
+        b.pack(fill='x')
+        ttk.Button(b, text='Cancel', command=dlg.destroy).pack(side='right')
+        ttk.Button(b, text='Write Setup', command=lambda: self.do_write(dlg, v)).pack(side='right', padx=8)
+        dlg.grab_set()
+
+    def do_write(self, dlg, v):
+        dlg.destroy()
+        try:
+            res = msf.write_all(v, self.config)
+        except Exception as err:
+            messagebox.showerror('Start New Deployment', 'Nothing more was written:\n\n%s' % err)
+            return
+        self.save_last_used(v)
+        lines = ['Setup written for %s.' % v['survey'], '', 'Setup: ' + res['setup']]
+        if res['backup']:
+            lines.append('Previous Setup kept as: ' + os.path.basename(res['backup']))
+        if res['yml']:
+            lines.append('Processing setup.yml: ' + res['yml'])
+        if res['log']:
+            lines.append('Logged in: ' + res['log'])
+        lines += ['', 'Restart ./fctd_epsi to start recording with it.']
+        messagebox.showinfo('Start New Deployment', '\n'.join(lines))
+
+
+def main():
+    config_path = os.environ.get('START_DEPLOYMENT_CONFIG') or os.path.join(HERE, 'config.yml')
+    if not os.path.isfile(config_path):
+        print('No config file at %s' % config_path)
+        sys.exit(1)
+    root = tk.Tk()
+    StartNewDeployment(root, config_path)
+    root.mainloop()
+
+
+if __name__ == '__main__':
+    main()
