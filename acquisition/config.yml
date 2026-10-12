@@ -18,14 +18,14 @@ experiment: MURI_2026
 latitude: 35
 
 # --- Setup values shared by every vehicle (deck hardware) ---
-# Calibration folders, written into Setup. fctd_epsi reads
-# <FP07 folder>/<SN>/Calibration_<SN>.txt for slots 1-2, the shear folder for
-# slots 3-4, and <CTD folder>/<SN>.CAL. The window lists serial numbers from
-# them, and setup.yml's calibrations_root is the folder above SHEAR_PROBES
-# (processing also needs <that folder>/SBE/<SN>.CAL).
-shear_cal_path: /Volumes/DEV1_HD/Users/Shared/Software_current_cruise/MOD_fish_lib/EPSILOMETER/CALIBRATION/SHEAR_PROBES
-fpo7_cal_path: /Volumes/DEV1_HD/Users/Shared/Software_current_cruise/MOD_fish_lib/EPSILOMETER/CALIBRATION/FPO7
-ctd_cal_path: /Volumes/DEV1_HD/Users/Shared/Software_current_cruise/MOD_fish_lib/Acquisition/SBECAL
+# Calibrations folder - one place for acquisition and processing. Must hold
+#   SBE/<SN>.CAL                          CTD
+#   SHEAR_PROBES/<SN>/Calibration_<SN>.txt shear probes (slots 3-4 in fctd_epsi)
+#   FPO7/<SN>/Calibration_<SN>.txt         FP07 probes (slots 1-2 in fctd_epsi)
+# Setup gets <folder>/SBE, <folder>/SHEAR_PROBES and <folder>/FPO7 (fctd_epsi
+# records N/A for any probe file it can't find); setup.yml gets
+# calibrations_root: <folder> for processing. Same layout as MOD_fish_calibrations.
+calibrations_root: /Volumes/DEV1_HD/Users/Shared/Software_current_cruise/MOD_fish_lib/EPSILOMETER/CALIBRATION
 # Serial ports
 command_port: /dev/tty.usbserial-FTU7BXC3
 ctd_port: /dev/tty.usbserial-AV0K4NN9

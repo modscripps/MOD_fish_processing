@@ -142,18 +142,24 @@ the window from the `Setup` again - it doesn't write or save anything.
 1. Needs `python3` with tkinter (python.org or miniconda; nothing to pip
    install).
 2. Edit `acquisition/config.yml` once per cruise: where `fctd_epsi`/`Setup`
-   live, the shear/FP07/CTD calibration folders, where processed data and the
-   deployment log go, and the deck hardware shared by every vehicle (serial
-   ports, baud rates, raw data folder). Use network paths
-   (`/Volumes/DEV1_HD/...`, `/Volumes/DEV3_HD/...`) so they're the same from
-   every computer. The calibration folders are written into `Setup` -
-   `fctd_epsi` reads `<FP07 folder>/<SN>/Calibration_<SN>.txt` (slots 1-2),
-   the shear folder (slots 3-4) and `<CTD folder>/<SN>.CAL`, and records N/A
-   for any it can't find - and they fill the serial number lists. setup.yml's
-   `calibrations_root` is the folder above `SHEAR_PROBES`; processing also
-   reads the CTD calibration from `SBE/<SN>.CAL` there, so copy the `.CAL`
-   files in once: `mkdir -p <CALIBRATION>/SBE && cp <SBECAL>/*.CAL <CALIBRATION>/SBE/`
-3. Check `acquisition/presets/*.yml` - one per vehicle (MAKO1-3, FCTD1-3:
+   live, the calibrations folder, where processed data and the deployment log
+   go, and the deck hardware shared by every vehicle (serial ports, baud
+   rates, raw data folder). Use network paths (`/Volumes/DEV1_HD/...`,
+   `/Volumes/DEV3_HD/...`) so they're the same from every computer.
+3. Set up the **calibrations folder** - one place that both `fctd_epsi` and
+   processing read, laid out like MOD_fish_calibrations:
+   - `SBE/<SN>.CAL` - CTD
+   - `SHEAR_PROBES/<SN>/Calibration_<SN>.txt` - shear probes
+   - `FPO7/<SN>/Calibration_<SN>.txt` - FP07 probes
+
+   `Setup` gets `<folder>/SBE`, `<folder>/SHEAR_PROBES` and `<folder>/FPO7`
+   (`fctd_epsi` looks up slots 1-2 in FPO7 and 3-4 in SHEAR_PROBES, and
+   records N/A for any probe file it can't find); `setup.yml` gets
+   `calibrations_root: <folder>`. The same subfolders fill the serial number
+   lists. The CTD path in `Setup` used to be `Acquisition/SBECAL`, so fill
+   `SBE/` before the first Create Setup and restart of `fctd_epsi`:
+   `mkdir -p <folder>/SBE && cp <MOD_fish_lib>/Acquisition/SBECAL/*.CAL <folder>/SBE/`
+4. Check `acquisition/presets/*.yml` - one per vehicle (MAKO1-3, FCTD1-3:
    fish type, pressure case, CTD, default AFE slot layout). MAKO2 and MAKO3
    have no serial numbers yet - the window asks for them the first time. A
    vehicle can also be typed into the Vehicle box; it's remembered (and added
@@ -161,7 +167,7 @@ the window from the `Setup` again - it doesn't write or save anything.
    start, copy a preset file. The
    window remembers the last-used probes per vehicle in
    `acquisition/last_used.json`.
-4. Make an alias of `acquisition/Start New Deployment.command` on the
+5. Make an alias of `acquisition/Start New Deployment.command` on the
    Desktop and double-click it.
 
 ### AFE slots

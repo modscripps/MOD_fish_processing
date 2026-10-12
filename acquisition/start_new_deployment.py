@@ -45,9 +45,8 @@ ADVANCED_GROUPS = [
         ('print_data', 'printData (0/1/2)', 'entry'), ('eng_disp_rate', 'engDispRate', 'entry')]),
     ('Raw files', [
         ('data_path', 'Raw data folder', 'entry'), ('file_size', 'File size [bytes]', 'entry')]),
-    ('Calibration paths written into Setup', [
-        ('shear_cal_path', 'Shear probes', 'entry'), ('fpo7_cal_path', 'FP07 probes', 'entry'),
-        ('ctd_cal_path', 'CTD (SBE)', 'entry')]),
+    ('Calibrations', [
+        ('calibrations_root', 'Calibrations folder', 'entry')]),
     ('Processing setup.yml and deployment log', [
         ('processed_root', 'Processed data root', 'entry'),
         ('deployment_log', 'Deployment log', 'entry')]),
@@ -55,11 +54,11 @@ ADVANCED_GROUPS = [
 ADVANCED_NOTES = {
     'Processing setup.yml and deployment log':
         'setup.yml goes in <processed data root>/<survey>/meta/.',
-    'Calibration paths written into Setup':
-        'fctd_epsi reads probe and CTD calibrations from these. They also fill the serial number lists.',
+    'Calibrations':
+        'Read by fctd_epsi (via Setup) and processing (via setup.yml); also fills the serial number lists.',
 }
 # config.yml keys that write_all/validate read from config, editable under Advanced
-CONFIG_OVERRIDES = ['processed_root', 'deployment_log']
+CONFIG_OVERRIDES = ['processed_root', 'deployment_log', 'calibrations_root']
 REMEMBERED = ['fish_flag', 'fish_pc', 'ctd_sn', 'compass_sn', 'profiling_direction', 'vnav', 'alt', 'fluor'] + \
     ['ch%d_%s' % (i, k) for i in range(1, 5) for k in ('type', 'sn')]
 TYPE_BY_LABEL = {v: k for k, v in msf.SENSOR_LABELS.items()}
@@ -271,9 +270,15 @@ class StartNewDeployment:
                 else:
                     w = ttk.Entry(grp, textvariable=var, width=44 if wide else 14)
                 w.grid(row=r, column=1, sticky='w', padx=4, pady=1)
+            row = len(fields)
+            if title == 'Calibrations':
+                ttk.Label(grp, text='Inside this folder:\n' + msf.calibration_layout_text(),
+                          font=('TkFixedFont', 11), justify='left'
+                          ).grid(row=row, column=0, columnspan=2, sticky='w', padx=4, pady=(4, 1))
+                row += 1
             if title in ADVANCED_NOTES:
                 ttk.Label(grp, text=ADVANCED_NOTES[title], foreground='#777', wraplength=380
-                          ).grid(row=len(fields), column=0, columnspan=2, sticky='w', padx=4, pady=1)
+                          ).grid(row=row, column=0, columnspan=2, sticky='w', padx=4, pady=1)
 
         # Messages + buttons
         self.msg = tk.Text(outer, height=7, wrap='word', relief='flat', background=self.root.cget('background'))
@@ -336,6 +341,8 @@ class StartNewDeployment:
         for _, fields in ADVANCED_GROUPS:
             for k, _, _ in fields:
                 v.pop(k, None)
+        for k in msf.CAL_SUBFOLDERS:     # always derived from the calibrations folder
+            v.pop(k, None)
         for k in ('ch1_type', 'ch2_type', 'ch3_type', 'ch4_type'):
             v.setdefault(k, None)
         if not v.get('ch1_type'):    # file written before slot types were recorded
@@ -376,8 +383,9 @@ class StartNewDeployment:
         prefix = msf.raw_file_prefix(v)
         self.prefix_label.config(text='raw files: %s%s_...' % (prefix, datetime.datetime.utcnow().strftime('%y_%m_%d')))
         names = msf.slot_names(v)
-        cal_dirs = {'fpo7': v.get('fpo7_cal_path', ''), 'shear': v.get('shear_cal_path', '')}
-        self.ctd_box.config(values=msf.list_ctd_sns(v.get('ctd_cal_path', '')))
+        cal = msf.calibration_paths(v.get('calibrations_root', ''))
+        cal_dirs = {'fpo7': cal['fpo7_cal_path'], 'shear': cal['shear_cal_path']}
+        self.ctd_box.config(values=msf.list_ctd_sns(cal['ctd_cal_path']))
         history = self.read_last_used().get('_sn_history', {})
         for i in range(4):
             t = v.get('ch%d_type' % (i + 1), 'none')

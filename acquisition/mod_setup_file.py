@@ -274,7 +274,36 @@ def setup_values(values):
         v.setdefault('ch%d_type' % i, 'none')
     v['microcond_sn'] = microcond_sn(values)
     v['runname'] = raw_file_prefix(values)
+    v.update(calibration_paths(values.get('calibrations_root', '')))
     return v
+
+
+# What goes inside the one calibrations folder: (Setup key, subfolder, files,
+# what). Same names processing (MODsetup_read_yaml.m) and the
+# MOD_fish_calibrations repo use. The window's description of the folder is
+# built from this table, so renaming a subfolder here changes it everywhere
+# in acquisition/ (planned: SHEAR_PROBES -> SHEAR, along with processing and
+# MOD_fish_calibrations).
+CAL_LAYOUT = [
+    ('ctd_cal_path', 'SBE', '<SN>.CAL', 'CTD'),
+    ('shear_cal_path', 'SHEAR_PROBES', '<SN>/Calibration_<SN>.txt', 'shear probes'),
+    ('fpo7_cal_path', 'FPO7', '<SN>/Calibration_<SN>.txt', 'FP07 probes'),
+]
+CAL_SUBFOLDERS = {key: sub for key, sub, _, _ in CAL_LAYOUT}
+
+
+def calibration_layout_text():
+    """The calibrations folder's contents, one aligned line per subfolder."""
+    w1 = max(len(sub) for _, sub, _, _ in CAL_LAYOUT) + 1
+    w2 = max(len(f) for _, _, f, _ in CAL_LAYOUT)
+    return '\n'.join('%-*s %-*s  %s' % (w1, sub + '/', w2, f, what) for _, sub, f, what in CAL_LAYOUT)
+
+
+def calibration_paths(cal_root):
+    """Setup's three calibration paths, all inside the one calibrations folder,
+    so fctd_epsi and processing read the same files."""
+    root = str(cal_root or '').rstrip('/')
+    return {k: (root + '/' + sub if root else '') for k, sub in CAL_SUBFOLDERS.items()}
 
 
 def raw_file_prefix(values):
@@ -358,11 +387,14 @@ def validate(values, config=None):
     # <CTD folder>/<SN>.CAL. A missing file isn't fatal - fctd_epsi records
     # N/A for that probe in the .modraw header.
     v = setup_values(values)
-    folders = {'fpo7_cal_path': 'FP07', 'shear_cal_path': 'Shear probe', 'ctd_cal_path': 'CTD'}
-    for key, label in folders.items():
-        d = v.get(key, '')
-        if d and not os.path.isdir(d):
-            warnings.append('%s calibration folder not found: %s' % (label, d))
+    cal_root = str(values.get('calibrations_root', '')).rstrip('/')
+    if cal_root and not os.path.isdir(cal_root):
+        warnings.append('Calibrations folder not found: %s' % cal_root)
+    else:
+        for key, sub in CAL_SUBFOLDERS.items():
+            d = v.get(key, '')
+            if d and not os.path.isdir(d):
+                warnings.append('Calibrations folder has no %s/ - %s' % (sub, d))
     for i in range(1, 5):
         t, sn = v.get('ch%d_type' % i), v['ch%d_sn' % i]
         d = v.get('fpo7_cal_path' if i <= 2 else 'shear_cal_path', '')
@@ -370,14 +402,11 @@ def validate(values, config=None):
                 and not os.path.isfile(os.path.join(d, sn, 'Calibration_%s.txt' % sn)):
             warnings.append('Slot %d (%s): no %s/%s/Calibration_%s.txt - fctd_epsi will record N/A for it'
                             % (i, names[i - 1], d, sn, sn))
+    # fctd_epsi and processing (MODsetup_read_yaml.m) both read <root>/SBE/<SN>.CAL
     ctd_dir, ctd_sn = v.get('ctd_cal_path', ''), v.get('ctd_sn', '')
     if ctd_dir and ctd_sn and os.path.isdir(ctd_dir) and not os.path.isfile(os.path.join(ctd_dir, ctd_sn + '.CAL')):
-        warnings.append('CTD %s: no %s.CAL in %s' % (ctd_sn, ctd_sn, ctd_dir))
-    # Processing (MODsetup_read_yaml.m) reads <calibrations_root>/SBE/<SN>.CAL
-    cal_root = processing_calibrations_root(v)
-    if cal_root and ctd_sn and os.path.isdir(cal_root) \
-            and not os.path.isfile(os.path.join(cal_root, 'SBE', ctd_sn + '.CAL')):
-        warnings.append('processing will need %s/SBE/%s.CAL - copy it there from %s' % (cal_root, ctd_sn, ctd_dir))
+        warnings.append('CTD %s: no %s/%s.CAL - fctd_epsi records no CTD calibration and processing stops'
+                        % (ctd_sn, ctd_dir, ctd_sn))
     if config:
         setup_dir = config.get('setup_dir', '')
         if setup_dir and os.path.exists(os.path.join(setup_dir, '.Setup.swp')):
@@ -474,7 +503,7 @@ def render_processing_yml(values, config):
         '# Same values as the Setup file fctd_epsi recorded into each .modraw header.',
         '# data_root is the only path in this file - raw/, L0/, L1/, meta/ are derived from it.',
         'data_root: %s' % yq(data_root),
-        'calibrations_root: %s' % yq(processing_calibrations_root(values)),
+        'calibrations_root: %s' % yq(str(values.get('calibrations_root', '')).rstrip('/')),
         'survey_name: %s' % yq(survey),
         'cruise: %s' % yq(values.get('cruise', '')),
         'experiment: %s' % yq(values.get('experiment', '')),
@@ -618,13 +647,6 @@ def write_all(values, config, write_yml=True):
 # --------------------------------------------------------------------------
 # Lists for dropdowns
 # --------------------------------------------------------------------------
-def processing_calibrations_root(values):
-    """calibrations_root for setup.yml: the folder holding SHEAR_PROBES/ (processing
-    reads <root>/SHEAR_PROBES/<SN>/ and <root>/SBE/<SN>.CAL)."""
-    p = str(values.get('shear_cal_path', '')).rstrip('/')
-    return os.path.dirname(p) if p else ''
-
-
 def list_probe_sns(d):
     """Probe serial numbers = the subfolders of a calibration folder."""
     if not d or not os.path.isdir(d):
