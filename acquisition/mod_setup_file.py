@@ -290,6 +290,8 @@ CAL_LAYOUT = [
     ('fpo7_cal_path', 'FPO7', '<SN>/Calibration_<SN>.txt', 'FP07 probes'),
 ]
 CAL_SUBFOLDERS = {key: sub for key, sub, _, _ in CAL_LAYOUT}
+# FP07 calibration files aren't normally used, so a missing one isn't warned about
+NO_CAL_WARNING = {'fpo7_cal_path'}
 
 
 def calibration_layout_text():
@@ -393,12 +395,14 @@ def validate(values, config=None):
     else:
         for key, sub in CAL_SUBFOLDERS.items():
             d = v.get(key, '')
+            if key in NO_CAL_WARNING:
+                continue
             if d and not os.path.isdir(d):
                 warnings.append('Calibrations folder has no %s/ - %s' % (sub, d))
     for i in range(1, 5):
         t, sn = v.get('ch%d_type' % i), v['ch%d_sn' % i]
         d = v.get('fpo7_cal_path' if i <= 2 else 'shear_cal_path', '')
-        if t in ('fpo7', 'shear') and d and os.path.isdir(d) \
+        if t == 'shear' and d and os.path.isdir(d) \
                 and not os.path.isfile(os.path.join(d, sn, 'Calibration_%s.txt' % sn)):
             warnings.append('Slot %d (%s): no %s/%s/Calibration_%s.txt - fctd_epsi will record N/A for it'
                             % (i, names[i - 1], d, sn, sn))
@@ -411,6 +415,13 @@ def validate(values, config=None):
         setup_dir = config.get('setup_dir', '')
         if setup_dir and os.path.exists(os.path.join(setup_dir, '.Setup.swp')):
             warnings.append('Setup is open in vi somewhere (.Setup.swp exists) - saving from vi would undo this')
+        # Same survey name as the Setup being replaced - fine for a restart,
+        # but usually means the name wasn't updated for a new deployment
+        old = os.path.join(setup_dir, 'Setup') if setup_dir else ''
+        if old and os.path.isfile(old) and values.get('survey') \
+                and parse_setup(old).get('CTD.survey') == values.get('survey'):
+            warnings.append('Survey name %s is the same as in the current Setup - new deployment? '
+                            'Update the survey name.' % values.get('survey'))
     if os.path.isdir('/dev'):
         for name in ('ctd_port', 'command_port', 'pcode_port'):
             flag = OPTIONAL_FLAGS.get(name)

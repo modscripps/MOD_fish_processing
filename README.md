@@ -133,8 +133,10 @@ for an FCTD - so the prefix can't be left on the wrong one.
 the vehicle next time fills in the same probes, CTD and pressure case. Every
 serial number used is also added to that sensor type's dropdown.
 The window opens filled in from the current `Setup` (or the first vehicle
-preset if there isn't one), and warns if the survey date isn't today, so an
-old survey name doesn't get reused by accident. **Load current Setup** fills
+preset if there isn't one), and warns if the survey date isn't today or the
+survey name is the same as in the current `Setup`, so an old survey name
+doesn't get reused by accident. Missing shear probe calibrations get a
+warning; missing FP07 ones don't (they aren't normally used). **Load current Setup** fills
 the window from the `Setup` again - it doesn't write or save anything.
 
 ### Setting it up on the acquisition Mac
