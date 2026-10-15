@@ -1,8 +1,8 @@
 """mod_setup_file - Part of MOD_fish_processing
 
 Read, validate and write the "Setup" file that ./fctd_epsi (the fish
-acquisition program) reads at startup, plus the processing setup.yml and the
-cruise deployment log. No GUI here - start_new_deployment.py is the window.
+acquisition program) reads at startup, plus dev1_setup.yml (the deployment's
+first processing metadata) and the cruise deployment log. No GUI here - start_new_deployment.py is the window.
 
 Rules the Setup writer follows, all from fctd_epsi's own source
 (fctd_epsi_acq/fctd_epsi/main.c ReadSetupFile, file_utils.c, ctd.h, pcode.h,
@@ -54,7 +54,7 @@ TYPE_NAMES = {'fpo7': ['t1', 't2'], 'shear': ['s1', 's2'],
               'fluor': ['f1', 'f2'], 'microcond': ['c1', 'c2']}
 DEFAULT_SLOT_NAMES = ['t1', 't2', 's1', 's2']   # standard EFE (MODsetup_default_efe.m)
 
-# Standard EFE electrical settings for processing setup.yml afe.channels
+# Standard EFE electrical settings for dev1_setup.yml afe.channels
 AFE_CHANNEL_SETTINGS = {
     't1': (2.5, 'Unipolar'), 't2': (2.5, 'Unipolar'),
     's1': (2.5, 'Bipolar'), 's2': (2.5, 'Bipolar'),
@@ -292,6 +292,9 @@ CAL_LAYOUT = [
 CAL_SUBFOLDERS = {key: sub for key, sub, _, _ in CAL_LAYOUT}
 # FP07 calibration files aren't normally used, so a missing one isn't warned about
 NO_CAL_WARNING = {'fpo7_cal_path'}
+# Not used by fctd_epsi, but processing needs it for shear epsilon: the shear
+# charge-amp electronics response (MODsetup_define_filters.m reads it from here)
+SHEAR_CHARGEAMP_FILE = os.path.join('SHEAR', 'cap1nFres200Meg_5KohmInput.mat')
 
 
 def calibration_layout_text():
@@ -383,6 +386,13 @@ def validate(values, config=None):
         warnings.append('Vehicle %s looks like a Mako, but fish type is FCTD' % values.get('vehicle'))
     elif flag == 'EPSI' and 'FCTD' in veh:
         warnings.append('Vehicle %s looks like an FCTD, but fish type is EPSI' % values.get('vehicle'))
+    spool = str(values.get('winch_spool', '') or '').strip()
+    previous_spool = str(values.get('previous_winch_spool', '') or '').strip()
+    if not spool:
+        warnings.append('No winch spool set - the cruise twist count needs it')
+    elif previous_spool and spool != previous_spool:
+        warnings.append('Winch spool changed from %s to %s - the twist count restarts from 0 at this deployment'
+                        % (previous_spool, spool))
     # Calibration files, looked up the way fctd_epsi does (ctd.c InitFishCTD):
     # slots 1-2 in the FP07 folder and slots 3-4 in the shear folder (by slot,
     # not sensor type), as <folder>/<SN>/Calibration_<SN>.txt, and the CTD as
@@ -406,6 +416,12 @@ def validate(values, config=None):
                 and not os.path.isfile(os.path.join(d, sn, 'Calibration_%s.txt' % sn)):
             warnings.append('Slot %d (%s): no %s/%s/Calibration_%s.txt - fctd_epsi will record N/A for it'
                             % (i, names[i - 1], d, sn, sn))
+    if cal_root and os.path.isdir(cal_root) \
+            and any(v.get('ch%d_type' % i) == 'shear' for i in range(1, 5)) \
+            and not os.path.isfile(os.path.join(cal_root, SHEAR_CHARGEAMP_FILE)):
+        warnings.append('No %s in the calibrations folder - processing would compute epsilon without '
+                        'the shear charge-amp correction (copy it from MOD_fish_calibrations)'
+                        % SHEAR_CHARGEAMP_FILE)
     # fctd_epsi and processing (MODsetup_read_yaml.m) both read <root>/SBE/<SN>.CAL
     ctd_dir, ctd_sn = v.get('ctd_cal_path', ''), v.get('ctd_sn', '')
     if ctd_dir and ctd_sn and os.path.isdir(ctd_dir) and not os.path.isfile(os.path.join(ctd_dir, ctd_sn + '.CAL')):
@@ -446,24 +462,21 @@ def _num(key, val, on=True):
 
 def render_setup(values):
     """Setup text in fctd_epsi's format. Same key order as the hand-edited
-    files; comments kept short because the whole file goes into every
-    .modraw header (MAX_SETUP_BYTES)."""
+    files; one comment line only (provenance), because the whole file goes
+    into every .modraw header (MAX_SETUP_BYTES)."""
     v = setup_values(values)
     pcode_on = bool(v.get('pcode_in_use', True))
     udp_on = bool(v.get('udp_in_use', True))
     L = [
-        '% Written by start_new_deployment.py ' + datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC'),
-        '% Edit with the Start New Deployment window, not by hand',
-        '%TCPIP port for send and receive data',
+        '% Written by start_new_deployment.py ' + datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')
+        + ' - edit with the Start New Deployment window',
         _num('TCPIPSocket.portnum', v['tcpip_port']),
         _num('UDPSocket.portnum', v['udp_port'], udp_on),
-        '%SENSOR SETUP',
         _line('CTD.survey', v['survey']),
         _line('CTD.experiment', v['experiment']),
         _line('CTD.cruise', v['cruise']),
         _line('CTD.vehicle', v['vehicle']),
         _line('CTD.fish_pc', v['fish_pc']),
-        '% CTD.fishflag EPSI or FCTD',
         _line('CTD.fishflag', v['fish_flag']),
         _line('CTD.SerialNum', v['ctd_sn']),
         _line('CTD.shear_Probecal_path', v['shear_cal_path']),
@@ -471,17 +484,13 @@ def render_setup(values):
         _line('CTD.CTD_cal_path', v['ctd_cal_path']),
         _line('CTD.MicroCond', v.get('microcond_sn', '')),
         _line('CTD.Compass', v.get('compass_sn', '')),
-        '% AFE slots 1-4: type (fpo7/shear/fluor/microcond/none) and probe SN (000 = none)',
     ]
     for i in range(1, 5):
         L.append(_line('CTD.ch%d_type' % i, v['ch%d_type' % i]))
         L.append(_line('CTD.ch%d_sn' % i, v['ch%d_sn' % i]))
     L += [
-        '%Display CTD data: 0=status, 1=engineer format, 2 = debug',
         _num('CTD.printData', v['print_data']),
-        '%engineer display rate: times per second, 2 4 8 or 16',
         _num('CTD.engDispRate', v['eng_disp_rate']),
-        '%Serial port for Fish and PCode',
         _line('CTD.CTDPortName', v['ctd_port']),
         _line('CTD.CommandPortName', v['command_port']),
         _num('CTD.speed', v['speed']),
@@ -489,7 +498,6 @@ def render_setup(values):
         _num('CTD.output_format', v['output_format']),
         _line('PCode.PCodePortName', v['pcode_port'], pcode_on),
         _num('PCode.speed', v['pcode_speed'], pcode_on),
-        '%FILES',
         _line('Ascii_dataFile.runname', v['runname']),
         _line('Ascii_dataFile.path', v['data_path']),
         _num('Ascii_dataFile.dataFileSize', v['file_size']),
@@ -497,8 +505,10 @@ def render_setup(values):
     return '\n'.join(L) + '\n'
 
 
-def render_processing_yml(values, config):
-    """setup.yml for MOD_fish_processing (MODsetup_read_yaml.m). All 7 AFE
+def render_dev1_setup_yml(values, config):
+    """dev1_setup.yml: what's on the vehicle, written on DEV1 when the
+    deployment starts - the first piece of the processing metadata (read with
+    MODsetup_read_yaml.m), not the full set (no PROCESS parameters). All 7 AFE
     slots are listed in order - PROCESS.channels is positional - and a slot
     with no sensor keeps its standard name with type: none."""
     survey = values['survey']
@@ -510,7 +520,8 @@ def render_processing_yml(values, config):
         return "'%s'" % str(s).replace("'", "''")
 
     L = [
-        '# Written by start_new_deployment.py %s for survey %s.' % (now, survey),
+        '# dev1_setup.yml - written on DEV1 by start_new_deployment.py %s for survey %s.' % (now, survey),
+        '# The deployment\'s first processing metadata; processing parameters are not in here.',
         '# Same values as the Setup file fctd_epsi recorded into each .modraw header.',
         '# data_root is the only path in this file - raw/, L0/, L1/, meta/ are derived from it.',
         'data_root: %s' % yq(data_root),
@@ -519,6 +530,7 @@ def render_processing_yml(values, config):
         'cruise: %s' % yq(values.get('cruise', '')),
         'experiment: %s' % yq(values.get('experiment', '')),
         'vehicle_name: %s' % yq(values.get('vehicle', '')),
+        'winch_spool: %s # one spool for every vehicle; twist restarts when it changes' % yq(values.get('winch_spool', '')),
         'pressure_case: %s' % yq(values.get('fish_pc', '')),
         'fish_flag: %s # EPSI or FCTD' % values['fish_flag'],
         'profiling_direction: %s # for turbulence data, up or down' % values.get('profiling_direction', 'down'),
@@ -589,21 +601,68 @@ def check_roundtrip(setup_path, values):
     return bad
 
 
-def processing_yml_path(values, config):
-    """setup.yml goes in <processed_root>/<survey>/meta/. processed_root is a
+def dev1_setup_yml_path(values, config):
+    """dev1_setup.yml goes in <processed_root>/<survey>/meta/. processed_root is a
     network path (e.g. /Volumes/DEV3_HD/...) that's the same from every computer."""
-    return os.path.join(config['processed_root'], values['survey'], 'meta', 'setup.yml')
+    return os.path.join(config['processed_root'], values['survey'], 'meta', 'dev1_setup.yml')
 
 
-LOG_FIELDS = ['utc_written', 'survey', 'vehicle', 'fish_flag', 'fish_pc', 'ctd_sn',
+SPOOL_LOG_FIELDS = ['datetime_utc', 'spool_id', 'spool_length_m', 'notes']
+SPOOL_LOG_COMMENT = ('# Winch spool changes for the cruise (one winch, one spool at a time, every vehicle). '
+                     'Start New Deployment adds a row when the spool changes; add a row by hand for a change '
+                     'made mid-deployment.')
+
+
+def spool_log_path(config):
+    """Cruise-wide spool_swap_log.csv, next to the survey folders."""
+    root = config.get('processed_root', '')
+    return os.path.join(root, 'spool_swap_log.csv') if root else ''
+
+
+def last_logged_spool(config):
+    """spool_id of the last row in the cruise spool_swap_log.csv ('' if none)."""
+    path = spool_log_path(config)
+    if not path or not os.path.isfile(path):
+        return ''
+    with open(path, newline='') as f:
+        rows = [r for r in csv.reader(f) if r and not r[0].startswith('#')]
+    if len(rows) < 2 or rows[0][:2] != SPOOL_LOG_FIELDS[:2]:
+        return ''
+    return rows[-1][1].strip()
+
+
+def log_spool_change(values, config, survey):
+    """Append a row to the cruise spool_swap_log.csv when the winch spool
+    differs from its last row (or it's the first spool logged). Returns the
+    path written, or ''. The twist count restarts at this time."""
+    path = spool_log_path(config)
+    spool = str(values.get('winch_spool', '') or '').strip()
+    if not path or not spool:
+        return ''
+    previous = last_logged_spool(config)
+    if spool == previous:
+        return ''
+    new_file = not os.path.isfile(path)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'a', newline='') as f:
+        if new_file:
+            f.write(SPOOL_LOG_COMMENT + '\n')
+            csv.writer(f).writerow(SPOOL_LOG_FIELDS)
+        note = ('changed from %s by Start New Deployment, survey %s' % (previous, survey) if previous
+                else 'first spool logged, by Start New Deployment, survey %s' % survey)
+        csv.writer(f).writerow([datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'), spool, '', note])
+    return path
+
+
+LOG_FIELDS = ['utc_written', 'survey', 'vehicle', 'winch_spool', 'fish_flag', 'fish_pc', 'ctd_sn',
               'ch1_type', 'ch1_sn', 'ch2_type', 'ch2_sn', 'ch3_type', 'ch3_sn',
               'ch4_type', 'ch4_sn', 'microcond_sn', 'experiment', 'cruise',
-              'setup_backup', 'processing_yml']
+              'setup_backup', 'dev1_setup_yml']
 
 
 def write_all(values, config, write_yml=True):
     """Back up the current Setup, write the new one (atomically), check it
-    reads back correctly, write the processing setup.yml and append to the
+    reads back correctly, write dev1_setup.yml and append to the
     deployment log. Returns a dict describing what was written. Raises
     ValueError if validation fails or the Setup doesn't read back."""
     errors, _ = validate(values, config)
@@ -613,7 +672,7 @@ def write_all(values, config, write_yml=True):
     setup_path = os.path.join(setup_dir, 'Setup')
     text = render_setup(values)
     stamp = datetime.datetime.utcnow().strftime('%Y%m%d%H%M%S')
-    result = {'setup': setup_path, 'backup': '', 'yml': '', 'log': ''}
+    result = {'setup': setup_path, 'backup': '', 'yml': '', 'log': '', 'spool_log': ''}
 
     if os.path.isfile(setup_path):
         backup = _unused_path(os.path.join(setup_dir, 'Setup_replaced_' + stamp))
@@ -628,11 +687,11 @@ def write_all(values, config, write_yml=True):
         raise ValueError('Setup was written but does not read back correctly:\n' + '\n'.join(bad))
 
     if write_yml and config.get('processed_root'):
-        yml_path = processing_yml_path(values, config)
+        yml_path = dev1_setup_yml_path(values, config)
         os.makedirs(os.path.dirname(yml_path), exist_ok=True)
         if os.path.isfile(yml_path):
             os.replace(yml_path, _unused_path(yml_path + '.replaced_' + stamp))
-        _atomic_write(yml_path, render_processing_yml(values, config))
+        _atomic_write(yml_path, render_dev1_setup_yml(values, config))
         result['yml'] = yml_path
 
     log_path = config.get('deployment_log', '')
@@ -641,17 +700,28 @@ def write_all(values, config, write_yml=True):
         row = {k: v.get(k, '') for k in LOG_FIELDS}
         row['utc_written'] = datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
         row['setup_backup'] = os.path.basename(result['backup'])
-        row['processing_yml'] = result['yml']
-        new_file = not os.path.isfile(log_path)
+        row['dev1_setup_yml'] = result['yml']
         d = os.path.dirname(log_path)
         if d:
             os.makedirs(d, exist_ok=True)
+        # An existing log with different columns (e.g. from before winch_spool was
+        # added) is set aside, so rows never land under the wrong headers
+        if os.path.isfile(log_path):
+            with open(log_path, newline='') as f:
+                header = next(csv.reader(f), None)
+            if header != LOG_FIELDS:
+                old = _unused_path(log_path[:-4] + '_old_columns.csv' if log_path.endswith('.csv')
+                                   else log_path + '_old_columns')
+                os.replace(log_path, old)
+                result['log_rotated'] = old
+        new_file = not os.path.isfile(log_path)
         with open(log_path, 'a', newline='') as f:
             w = csv.DictWriter(f, fieldnames=LOG_FIELDS)
             if new_file:
                 w.writeheader()
             w.writerow(row)
         result['log'] = log_path
+    result['spool_log'] = log_spool_change(values, config, values['survey'])
     return result
 
 

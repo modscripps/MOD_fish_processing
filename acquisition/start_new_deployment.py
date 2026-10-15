@@ -3,9 +3,9 @@
 The "Start New Deployment" window. Pick the vehicle (most fields fill in from
 its preset), set the probes on each AFE slot, build the survey name, and
 click Create Setup. That writes the Setup file ./fctd_epsi reads (after
-backing up the old one), the processing setup.yml for MOD_fish_processing,
+backing up the old one), dev1_setup.yml for MOD_fish_processing,
 and a row in the cruise deployment log. See mod_setup_file.py for the rules
-the Setup file has to follow, and README.md for setup.
+the Setup file has to follow, and docs/workflow/start_new_deployment.md for setup.
 
 Run:  python3 start_new_deployment.py      (or double-click
       "Start New Deployment.command")
@@ -47,15 +47,15 @@ ADVANCED_GROUPS = [
         ('data_path', 'Raw data folder', 'entry'), ('file_size', 'File size [bytes]', 'entry')]),
     ('Calibrations', [
         ('calibrations_root', 'Calibrations folder', 'entry')]),
-    ('Processing setup.yml and deployment log', [
+    ('dev1_setup.yml and deployment log', [
         ('processed_root', 'Processed data root', 'entry'),
         ('deployment_log', 'Deployment log', 'entry')]),
 ]
 ADVANCED_NOTES = {
-    'Processing setup.yml and deployment log':
-        'setup.yml goes in <processed data root>/<survey>/meta/.',
+    'dev1_setup.yml and deployment log':
+        'dev1_setup.yml goes in <processed data root>/<survey>/meta/.',
     'Calibrations':
-        'Read by fctd_epsi (via Setup) and processing (via setup.yml); also fills the serial number lists.',
+        'Read by fctd_epsi (via Setup) and processing (via dev1_setup.yml); also fills the serial number lists.',
 }
 # config.yml keys that write_all/validate read from config, editable under Advanced
 CONFIG_OVERRIDES = ['processed_root', 'deployment_log', 'calibrations_root']
@@ -90,6 +90,10 @@ class StartNewDeployment:
                 self.vars['vehicle'].set(names[0])
                 self.on_vehicle()
             self.refresh()
+        # The winch spool is the same for every vehicle until it's changed:
+        # start from the one used at the last Create Setup
+        if not self.vars['winch_spool'].get():
+            self.vars['winch_spool'].set(self.previous_winch_spool())
 
     # ------------------------------------------------------------------ data
     def load_presets(self):
@@ -107,11 +111,20 @@ class StartNewDeployment:
         except (OSError, ValueError):
             return {}
 
+    def previous_winch_spool(self):
+        """Winch spool in use: the last row of the cruise spool_swap_log.csv, or
+        else the one used at the last Create Setup (any vehicle)."""
+        shown = {k: self.vars[k].get().strip() for k in CONFIG_OVERRIDES if k in self.vars}
+        return (msf.last_logged_spool(self.effective_config(dict(self.config, **shown)))
+                or self.read_last_used().get('_cruise', {}).get('winch_spool', ''))
+
     def save_last_used(self, values):
         """Remember this vehicle's probes etc. (filled in next time it's picked),
-        and add each slot's serial number to that sensor type's dropdown list."""
+        the winch spool for the cruise (one spool for every vehicle), and add
+        each slot's serial number to that sensor type's dropdown list."""
         data = self.read_last_used()
         data[values['vehicle']] = {k: values.get(k) for k in REMEMBERED}
+        data.setdefault('_cruise', {})['winch_spool'] = values.get('winch_spool', '')
         history = data.setdefault('_sn_history', {})
         for i in range(1, 5):
             t, sn = values.get('ch%d_type' % i), values.get('ch%d_sn' % i)
@@ -138,6 +151,7 @@ class StartNewDeployment:
         for i in range(1, 5):
             v['ch%d_type' % i] = TYPE_BY_LABEL.get(v.get('ch%d_type' % i), v.get('ch%d_type' % i, 'none'))
         v['survey'] = msf.build_survey(v.get('survey_date', ''), v.get('vehicle', ''), v.get('survey_desc', ''))
+        v['previous_winch_spool'] = self.previous_winch_spool()
         return v
 
     def set_values(self, d):
@@ -217,6 +231,8 @@ class StartNewDeployment:
         ttk.Label(ins, text='Profiling').grid(row=0, column=4, sticky='e', **pad)
         ttk.Combobox(ins, textvariable=self.var('profiling_direction', value='down'), values=['down', 'up'],
                      state='readonly', width=6).grid(row=0, column=5, sticky='w', **pad)
+        ttk.Label(ins, text='Winch spool').grid(row=0, column=6, sticky='e', **pad)
+        ttk.Entry(ins, textvariable=self.var('winch_spool'), width=12).grid(row=0, column=7, sticky='w', **pad)
 
         ttk.Label(ins, text='AFE slot', font=('TkDefaultFont', 12, 'bold')).grid(row=1, column=0, sticky='w', **pad)
         ttk.Label(ins, text='Sensor', font=('TkDefaultFont', 12, 'bold')).grid(row=1, column=1, sticky='w', **pad)
@@ -324,9 +340,9 @@ class StartNewDeployment:
         d = dict(self.presets.get(name, {}))
         d.update({k: v for k, v in self.read_last_used().get(name, {}).items() if v is not None})
         d.pop('vehicle', None)
-        if d:
-            self.set_values(d)
-        elif name:
+        known_vehicle = bool(d)
+        self.set_values(d)   # the winch spool isn't per vehicle, so it's left as it is
+        if not known_vehicle and name:
             self.status('New vehicle %s - fill in the fish type and instruments; they are remembered '
                         'for %s when you click Create Setup.' % (name, name))
 
@@ -449,7 +465,7 @@ class StartNewDeployment:
             ttk.Label(dlg, text='%d warning(s) - see the main window.' % len(warnings), foreground='#a05a00',
                       padding=(8, 0)).pack(side='bottom', anchor='w')
         cfg = self.effective_config(v)
-        yml = msf.processing_yml_path(v, cfg) if cfg.get('processed_root') else ''
+        yml = msf.dev1_setup_yml_path(v, cfg) if cfg.get('processed_root') else ''
         note = 'Also writes %s%s' % (yml, ' (an existing one is kept as .replaced_*)' if yml and os.path.isfile(yml) else '')
         ttk.Label(dlg, text=note, padding=8, wraplength=700).pack(side='bottom', anchor='w')
 
@@ -489,9 +505,13 @@ class StartNewDeployment:
         if res['backup']:
             lines.append('Previous Setup kept as: ' + os.path.basename(res['backup']))
         if res['yml']:
-            lines.append('Processing setup.yml: ' + res['yml'])
+            lines.append('dev1_setup.yml: ' + res['yml'])
         if res['log']:
             lines.append('Logged in: ' + res['log'])
+        if res.get('spool_log'):
+            lines.append('Winch spool change logged in: ' + res['spool_log'])
+        if res.get('log_rotated'):
+            lines.append('(The old log had different columns - kept as %s)' % os.path.basename(res['log_rotated']))
         lines += ['', 'Restart ./fctd_epsi to start recording with it.']
         messagebox.showinfo('Start New Deployment', '\n'.join(lines))
 

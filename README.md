@@ -20,7 +20,7 @@ L0_files = MODprocess_all_modraw_to_L0('/path/to/raw');
 ```
 
 Converts every raw file in the folder to a `.mat` file in a sibling `L0`
-folder (created if missing). No setup.yml needed - EFE data is converted to
+folder (created if missing). No processing yml needed - EFE data is converted to
 volts/g using the standard EFE board config. Already-converted files are
 skipped, except the newest one, which is always redone in case it's still
 being written - so it's safe to rerun during acquisition.
@@ -111,9 +111,9 @@ Setup** shows the changes, then:
 - backs up the current `Setup` as `Setup_replaced_YYYYMMDDHHMMSS` and writes
   the new one next to `fctd_epsi`, then reads it back the way `fctd_epsi`
   does to check every value,
-- writes `<processed_root>/<survey>/meta/setup.yml` for MOD_fish_processing
+- writes `<processed_root>/<survey>/meta/dev1_setup.yml` for MOD_fish_processing
   (all 7 AFE slots with names, types and serial numbers; an existing one is
-  kept as `setup.yml.replaced_*`),
+  kept as `dev1_setup.yml.replaced_*`),
 - appends a row to the cruise `deployment_log.csv`.
 
 `fctd_epsi` only reads `Setup` when it starts, so restart it afterwards.
@@ -121,8 +121,30 @@ Setup** shows the changes, then:
 The window warns if the vehicle name and fish type disagree (MAKO or EPSI
 in the name with FCTD selected, or FCTD in the name with EPSI selected).
 
+**Winch spool** names the spool on the winch. There's one winch with one
+spool on it at a time, and every vehicle uses it, so this isn't per vehicle:
+the window fills in the spool used at the last Create Setup, whatever the
+vehicle was. Change it only when the spool is changed - the window then warns
+that the twist count restarts from 0 at this deployment. It's written to
+`dev1_setup.yml` (`winch_spool:`) and the deployment log (not to `Setup` -
+`fctd_epsi` doesn't use it), and the window warns if it's empty.
+
+When the spool differs from the last row of the cruise
+`<processed root>/spool_swap_log.csv` (or that file doesn't exist yet), Create
+Setup appends a row to it: the UTC time, the spool, and a note. That log, not
+the window's memory, is what the next Create Setup compares against. Add a row
+by hand for a spool changed in the middle of a deployment (columns
+`datetime_utc` as `yyyy-MM-ddTHH:mm:ssZ`, `spool_id`, `spool_length_m`,
+`notes`). Processing checks the log against the `dev1_setup.yml` files
+(`MODprocess_find_spool_swaps.m`), so losing either one doesn't lose a change.
+
+If `deployment_log.csv` already exists with different columns (e.g. one
+written before the winch_spool column), it's set aside as
+`deployment_log_old_columns.csv` and a new log is started, so rows never end
+up under the wrong headers. The Create Setup message says when this happens.
+
 **Advanced settings** (ports, network, CTD data, raw files, calibration
-paths, and where `setup.yml` and the deployment log go) default to
+paths, and where `dev1_setup.yml` and the deployment log go) default to
 `config.yml`. Changes there apply to that window only - edit `config.yml`
 to change them for good.
 
@@ -148,19 +170,27 @@ the window from the `Setup` again - it doesn't write or save anything.
    go, and the deck hardware shared by every vehicle (serial ports, baud
    rates, raw data folder). Use network paths (`/Volumes/DEV1_HD/...`,
    `/Volumes/DEV3_HD/...`) so they're the same from every computer.
-3. Set up the **calibrations folder** - one place that both `fctd_epsi` and
-   processing read, laid out like MOD_fish_calibrations:
+3. Set up the **calibrations folder**: a clone of the MOD_fish_calibrations
+   repo next to the software on DEV1,
+   `/Volumes/DEV1_HD/Users/Shared/Software_current_cruise/MOD_fish_calibrations`
+   (`calibrations_root` in `config.yml`). Cal files are kept up to date there
+   with `git pull`, separately from the code. `fctd_epsi` (DEV1) and processing
+   (DEV3, over the network at the same path) read the same files:
    - `SBE/<SN>.CAL` - CTD
    - `SHEAR_PROBES/<SN>/Calibration_<SN>.txt` - shear probes
    - `FPO7/<SN>/Calibration_<SN>.txt` - FP07 probes
+   - `SHEAR/cap1nFres200Meg_5KohmInput.mat` - shear charge-amp response
+     (processing only; without it epsilon has no electronics correction)
 
    `Setup` gets `<folder>/SBE`, `<folder>/SHEAR_PROBES` and `<folder>/FPO7`
    (`fctd_epsi` looks up slots 1-2 in FPO7 and 3-4 in SHEAR_PROBES, and
-   records N/A for any probe file it can't find); `setup.yml` gets
+   records N/A for any probe file it can't find); `dev1_setup.yml` gets
    `calibrations_root: <folder>`. The same subfolders fill the serial number
-   lists. The CTD path in `Setup` used to be `Acquisition/SBECAL`, so fill
-   `SBE/` before the first Create Setup and restart of `fctd_epsi`:
-   `mkdir -p <folder>/SBE && cp <MOD_fish_lib>/Acquisition/SBECAL/*.CAL <folder>/SBE/`
+   lists. The CTD path in `Setup` used to be `MOD_fish_lib/Acquisition/SBECAL`;
+   MOD_fish_calibrations' `SBE/` has the same ten `.CAL` files with the same
+   coefficients (checked 2026-10-15: only letter case, line endings and number
+   formatting differ, plus one more digit on 0536's PTEMPA0), so moving to it
+   changes no CTD calibration.
 4. Check `acquisition/presets/*.yml` - one per vehicle (MAKO1-3, FCTD1-3:
    fish type, pressure case, CTD, default AFE slot layout). MAKO2 and MAKO3
    have no serial numbers yet - the window asks for them the first time. A
@@ -177,7 +207,7 @@ the window from the `Setup` again - it doesn't write or save anything.
 Slots 1-4 each take FP07, shear, fluorometer, microconductivity or none;
 slots 5-7 are always the accelerometers a1-a3. Names follow slot order (t1/t2,
 s1/s2, f1, c1). An empty slot is written as serial number `000` in `Setup`
-and keeps its standard name with `type: none` in setup.yml, so slot positions
+and keeps its standard name with `type: none` in dev1_setup.yml, so slot positions
 never shift. `Setup` also records each slot's type (`CTD.chN_type`), which
 `fctd_epsi` ignores but copies into every `.modraw` header.
 
@@ -192,4 +222,14 @@ From `fctd_epsi`'s source (`main.c` ReadSetupFile, `file_utils.c`,
 - Names (survey, vehicle, probe serial numbers, ports, ...) are at most 31
   characters - longer ones silently run into the next field.
 - The whole file must stay under ~2000 bytes (it is copied into every
-  `.modraw` header through a fixed-size buffer).
+  `.modraw` header through a fixed-size buffer). So `Setup` has a single
+  comment line - when and how it was written - and no section notes.
+- Keys `fctd_epsi` never reads (`CTD.MicroCond`, `CTD.Compass`,
+  `CTD.output_format`, `CTD.ch1-4_type`) are still written: they end up in
+  every `.modraw` header, so a raw file says what was on each slot.
+
+`dev1_setup.yml` says what is on the vehicle (survey, vehicle, winch spool,
+`calibrations_root`, CTD and AFE slot serial numbers). The processing that
+reads it (`MODsetup_build_yaml.m`, which merges it with the cruise processing
+parameters into `depl_meta_data.yml`, and `MODprocess_find_spool_swaps.m`)
+is not on this branch.
